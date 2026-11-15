@@ -110,10 +110,14 @@ git status --short
 同步只复制源码、脚本、配置和插件 DLL；`build\`、`dist\`、`tests\dist\`、`mod\plugin\`、
 `deck-sync-state.txt`、`dumps\` 一律跳过，所以仓库里不会出现构建垃圾或本机路径。
 
+改完怎么提交、平时怎么备份、怎么发新版本（打 tag + GitHub Release 上传 zip），
+见 [`docs/维护与发布流程.md`](docs/维护与发布流程.md)（含逐条命令和检查清单）。
+
 ## 文档
 
 | 文档 | 内容 |
 | --- | --- |
+| [`docs/维护与发布流程.md`](docs/维护与发布流程.md) | 日常更新、备份、发新版本、回滚的完整流程与检查清单 |
 | [`DeckBuilder/README.md`](DeckBuilder/README.md) | 程序功能、安装、打包、目录结构、当前限制 |
 | [`DeckBuilder/mod/README.md`](DeckBuilder/mod/README.md) | 同步插件的配置项（13 个键）与同步规则 |
 | [`DeckBuilder/THIRD_PARTY_NOTICES.md`](DeckBuilder/THIRD_PARTY_NOTICES.md) | 随程序分发的第三方组件许可 |
