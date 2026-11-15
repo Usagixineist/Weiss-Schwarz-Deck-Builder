@@ -1,0 +1,17 @@
+# 统一换行，避免 Windows / Linux 来回改行尾
+* text=auto eol=crlf
+*.sh text eol=lf
+
+# 卡表测试样本按原样保存，git 不要做任何转换
+/DeckBuilder/tests/fixtures/** -text
+
+# 二进制文件
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.dll binary
+*.exe binary
+*.zip binary
+*.7z binary
+*.rar binary
+*.pdf binary

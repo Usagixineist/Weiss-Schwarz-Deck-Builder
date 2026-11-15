@@ -1,0 +1,160 @@
+{
+  "name": "Example",
+  "author": "Weiss Schwarz CH Skin Template",
+  "version": "1.3.0",
+  "order": 100,
+  "scenes": [
+    {
+      "scene": "MainMenu",
+      "background": {
+        "enabled": true,
+        "image": "images/mainmenu.png",
+        "fit": false,
+        "dim": 0.25,
+        "name": "__ExampleMainMenu"
+      },
+      "overlays": [
+        {
+          "target": "Title",
+          "path": "Canvas/Title",
+          "image": "images/logo.png",
+          "width": 600,
+          "hideTarget": true,
+          "name": "__ExampleLogo"
+        }
+      ]
+    },
+    {
+      "scene": "DeckEditorRedo",
+      "background": {
+        "enabled": true,
+        "image": "images/deckeditor.png",
+        "fit": false,
+        "dim": 0.2,
+        "mode": "camera",
+        "name": "__ExampleDeck"
+      },
+      "objects": [
+        {
+          "name": "Table",
+          "includeChildren": true,
+          "image": "images/deckeditor_table.png",
+          "logMatch": true
+        }
+      ],
+      "selectionStyle": {
+        "enabled": true,
+        "styleZones": true,
+        "styleDeckEditorZones": true,
+        "styleDeckCards": true,
+        "styleDeckEditorCards": true,
+        "persistSearchSelection": true,
+        "normalColor": "#FFFFFF",
+        "selectedColor": "#FFD54A",
+        "borderWidth": 10,
+        "cornerRadius": 24,
+        "textureWidth": 256,
+        "textureHeight": 352,
+        "log": false
+      }
+    },
+    {
+      "scene": "Duel",
+      "background": {
+        "enabled": true,
+        "image": "images/duel.png",
+        "fit": false,
+        "dim": 0.25,
+        "mode": "camera",
+        "name": "__ExampleDuel"
+      },
+      "selectionStyle": {
+        "enabled": true,
+        "styleZones": true,
+        "styleDeckEditorZones": false,
+        "styleDeckCards": true,
+        "styleDeckEditorCards": false,
+        "styleHandCards": true,
+        "styleDuelCounters": true,
+        "duelHandCountWarningThreshold": 7,
+        "duelHandCountWarningColor": "#FF3B30",
+
+        "persistSearchSelection": false,
+        "normalColor": "#FFFFFF",
+        "selectedColor": "#FFD54A",
+        "handCardColor": "#FFFFFF",
+        "handCardBorderWidth": 16,
+        "handCardOuterAlpha": 0.45,
+        "handCardPlayableColor": "#FFE58A",
+        "borderWidth": 10,
+        "cornerRadius": 24,
+        "textureWidth": 256,
+        "textureHeight": 352,
+        "log": false
+      },
+      "objects": [
+        {
+          "name": "Table",
+          "includeChildren": true,
+          "image": "images/table.png",
+          "logMatch": true
+        },
+        {
+          "name": "StageBack*",
+          "includeChildren": true,
+          "image": "images/duel.png",
+          "logMatch": true
+        }
+      ]
+    },
+    {
+      "scene": "OnlineDuel",
+      "background": {
+        "enabled": true,
+        "image": "images/duel.png",
+        "fit": false,
+        "dim": 0.25,
+        "mode": "camera",
+        "name": "__ExampleOnlineDuel"
+      },
+      "selectionStyle": {
+        "enabled": true,
+        "styleZones": true,
+        "styleDeckEditorZones": false,
+        "styleDeckCards": true,
+        "styleDeckEditorCards": false,
+        "styleHandCards": true,
+        "duelHandCountWarningThreshold": 7,
+        "duelHandCountWarningColor": "#FF3B30",
+
+        "styleDuelCounters": true,
+        "persistSearchSelection": false,
+        "normalColor": "#FFFFFF",
+        "selectedColor": "#FFD54A",
+        "handCardColor": "#FFFFFF",
+        "handCardBorderWidth": 16,
+        "handCardOuterAlpha": 0.45,
+        "handCardPlayableColor": "#FFE58A",
+        "borderWidth": 10,
+        "cornerRadius": 24,
+        "textureWidth": 256,
+        "textureHeight": 352,
+        "log": false
+      },
+      "objects": [
+        {
+          "name": "Table",
+          "includeChildren": true,
+          "image": "images/table.png",
+          "logMatch": true
+        },
+        {
+          "name": "StageBack*",
+          "includeChildren": true,
+          "image": "images/duel.png",
+          "logMatch": true
+        }
+      ]
+    }
+  ]
+}

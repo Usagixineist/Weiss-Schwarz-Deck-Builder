@@ -1,0 +1,24 @@
+# ---------- 构建 / 发布产物 ----------
+/DeckBuilder/build/
+/DeckBuilder/dist/
+/DeckBuilder/tests/dist/
+/DeckBuilder/tests/test-results.txt
+/DeckBuilder/mod/plugin/
+/DeckBuilder/mod/build/
+
+# ---------- BepInEx 运行时数据 ----------
+/BepInEx/cache/
+/BepInEx/LogOutput.log
+/BepInEx/plugins/WeissSchwarzDeckSync/deck-sync-state.txt
+/BepInEx/plugins/WeissSchwarzSkin/dumps/
+
+# ---------- 本机绝对路径覆盖文件：绝不提交 ----------
+/DeckBuilder/dist/data-root.txt
+data-root.txt
+
+# ---------- 杂项 ----------
+*.bak-*
+*.log
+.vs/
+Thumbs.db
+desktop.ini

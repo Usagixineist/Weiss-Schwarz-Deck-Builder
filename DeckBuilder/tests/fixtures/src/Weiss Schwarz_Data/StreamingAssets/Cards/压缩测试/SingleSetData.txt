@@ -1,0 +1,5 @@
+Series: 压缩测试
+
+Folder: 压缩测试/S01
+Prefix: ZC/S01
+SetName: Compress Test

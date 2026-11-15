@@ -1,0 +1,13 @@
+// Minimal card data used by the archive smoke test.
+
+Character: ZC/S01-001
+Name Archive Test Card
+Color R
+Level 0
+Cost 0
+Trigger None
+Soul 1
+Power 1000
+Trait1 Test
+Text Archive test card.
+EndCard
