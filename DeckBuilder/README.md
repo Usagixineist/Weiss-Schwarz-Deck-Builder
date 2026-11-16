@@ -379,6 +379,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File DeckBuilder\mod\build.ps1
 
 - 游戏目录默认从脚本所在目录向上找 `Weiss Schwarz.exe`，也可以 `-GameRoot` 指定；
 - 提交用的是本机 git 凭据（GitHub Desktop 登录过就有），不会再弹登录窗；
+- 仓库里万一混进构建产物 / 日志，脚本会红字列出并拒绝 `-Commit`，确认确实要提交再加 `-Force`；
 - 这两个脚本只给开发用，不在 `package.ps1` 的分发清单里，发布包里没有它们。
 
 ## 打包分发

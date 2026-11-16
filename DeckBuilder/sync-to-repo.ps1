@@ -32,6 +32,9 @@
 .PARAMETER Push
     推送。配合 -Commit 是"提交完就推"；单独用时推已有的本地提交。
 
+.PARAMETER Force
+    仓库里出现构建产物/日志等不该提交的文件时，仍然执行 -Stage / -Commit。
+
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File DeckBuilder\sync-to-repo.ps1 -DryRun
 
@@ -46,7 +49,8 @@ param(
     [switch]$Stage,
     [switch]$Commit,
     [string]$Message = '',
-    [switch]$Push
+    [switch]$Push,
+    [switch]$Force
 )
 
 $ErrorActionPreference = 'Stop'
@@ -80,7 +84,6 @@ function Invoke-GitText {
     try {
         [Console]::OutputEncoding = [Text.Encoding]::UTF8
         $output = @(& git -C $Repository @GitArgs)
-        $script:LastGitExit = $LASTEXITCODE
         return $output
     }
     finally {
@@ -94,8 +97,6 @@ function Fail([string]$Text) {
     Write-Host ('[错误] ' + $Text) -ForegroundColor Red
     exit 1
 }
-
-
 
 # ---- 定位游戏目录 ----
 if ($GameRoot) {
@@ -202,6 +203,9 @@ if ($suspects.Count -gt 0) {
     $suspects | ForEach-Object { Write-Host ('  ' + $_) -ForegroundColor Red }
     Write-Host ('处理：git -C "' + $RepoRoot + '" rm --cached -r <路径>，再检查 .gitignore 是否还在。') -ForegroundColor Red
     Write-Host '直接提交会把构建垃圾重新塞回仓库（之前已经清过一次）。' -ForegroundColor Red
+    if (($Stage -or $Commit) -and -not $Force) {
+        Fail '上面这些不该进仓库，已停止暂存/提交。确认确实要提交再加 -Force。'
+    }
 }
 
 # ---- 3. 可选：暂存 / 提交 / 推送 ----
