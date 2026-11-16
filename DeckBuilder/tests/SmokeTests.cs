@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
@@ -2252,6 +2253,26 @@ internal static class SmokeTests
             for (int i = 0; signature && i < png.Length; i++)
                 signature = header[i] == png[i];
             Check("deck PNG starts with the PNG signature", signature);
+
+            // The 缩略 sheet stamps the repeat count the way the deck grid
+            // does: a round sticker in the bottom right corner of the card.
+            // The old export drew a rounded "xN" pill on the top right.
+            float stickerScale = 252F / 176F;
+            var cardTile = new Rectangle(56, 142, 252, 352);
+            Rectangle sticker = DeckExportService.PlaceCountBadge(cardTile, 40,
+                stickerScale);
+            Check("deck count sticker sits in the card's bottom right corner",
+                sticker.Width == 40 && sticker.Height == 40 &&
+                sticker.Right == cardTile.Right - 6 &&
+                sticker.Bottom == cardTile.Bottom - 6,
+                sticker.ToString());
+            Check("deck count sticker scales its gap with the card",
+                DeckExportService.CountBadgeMargin(1F) == 4 &&
+                DeckExportService.CountBadgeMargin(stickerScale) == 6 &&
+                DeckExportService.CountBadgePadding(1F) == 3 &&
+                DeckExportService.CountBadgePadding(stickerScale) == 4,
+                DeckExportService.CountBadgeMargin(stickerScale) + "/" +
+                    DeckExportService.CountBadgePadding(stickerScale));
         }
         finally
         {

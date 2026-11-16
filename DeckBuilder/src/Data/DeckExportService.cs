@@ -400,29 +400,109 @@ namespace WeissDeckBuilder.Data
             }
         }
 
+        /// <summary>
+        /// Padding between the count text and the edge of its round sticker.
+        /// It follows the card size so the exported sticker keeps the same
+        /// weight as the grid badge it copies.
+        /// </summary>
+        internal static int CountBadgePadding(float scale)
+        {
+            return Math.Max(3, (int)Math.Round(3F * scale));
+        }
+
+        /// <summary>
+        /// Distance between the round sticker and the card edge, scaled like
+        /// the grid badge (4 px on a 176 px thumb).
+        /// </summary>
+        internal static int CountBadgeMargin(float scale)
+        {
+            return Math.Max(4, (int)Math.Round(4F * scale));
+        }
+
+        /// <summary>
+        /// Places the round count sticker in the bottom right corner of a
+        /// tile, the same corner the deck grid uses, so the exported sheet
+        /// never carries the old label on the top right.
+        /// </summary>
+        internal static Rectangle PlaceCountBadge(Rectangle tile,
+            int diameter, float scale)
+        {
+            int margin = CountBadgeMargin(scale);
+            return new Rectangle(
+                tile.Right - diameter - margin,
+                tile.Bottom - diameter - margin,
+                diameter,
+                diameter);
+        }
+
+        /// <summary>
+        /// Repeat count sticker of the 缩略 sheet: the same "×N" circle the
+        /// deck grid draws in the bottom right corner of a card (round accent
+        /// fill, dark halo, white count) instead of the old rounded "xN" pill
+        /// that sat on the top right.
+        /// </summary>
         private static void DrawCountBadge(Graphics graphics, Rectangle tile,
             int count)
         {
-            string text = "x" + count;
-            using (var font = new Font("Microsoft YaHei UI", 15F,
-                FontStyle.Bold, GraphicsUnit.Pixel))
-            using (var format = new StringFormat())
+            string text = "\u00D7" + count;
+
+            // The grid sizes its sticker from a 176 px wide thumb; the
+            // exported tile is ImageCardWidth wide, so the gap, the margin
+            // and the font grow with the card and the badge keeps exactly
+            // the same weight on the artwork.
+            float scale = tile.Width / 176F;
+            int pad = CountBadgePadding(scale);
+            int margin = CountBadgeMargin(scale);
+
+            using (var format =
+                (StringFormat)StringFormat.GenericTypographic.Clone())
+            using (var font = new Font("Microsoft YaHei UI",
+                Math.Max(12F, 16F * scale), FontStyle.Bold,
+                GraphicsUnit.Pixel))
+            using (var smallFont = new Font("Microsoft YaHei UI",
+                Math.Max(9F, 11F * scale), FontStyle.Bold,
+                GraphicsUnit.Pixel))
             {
                 format.Alignment = StringAlignment.Center;
                 format.LineAlignment = StringAlignment.Center;
-                SizeF size = graphics.MeasureString(text, font);
-                int badgeWidth = Math.Max(40, (int)size.Width + 14);
-                int badgeHeight = 32;
-                var badge = new Rectangle(
-                    tile.Right - badgeWidth - 8, tile.Top + 8,
-                    badgeWidth, badgeHeight);
-                using (var path = CreateRoundedPath(badge, 9F))
-                using (var fill = new SolidBrush(Color.FromArgb(225,
-                    AccentColor)))
+
+                // The badge hugs the count: text size plus a small pad, so
+                // the sticker stays a dot on the art instead of a bar.
+                Font used = font;
+                SizeF size = graphics.MeasureString(text, used,
+                    PointF.Empty, format);
+                int diameter = (int)Math.Ceiling(
+                    Math.Max(size.Width, size.Height)) + pad * 2;
+                int maxDiameter = Math.Max(20, Math.Min(
+                    tile.Width - margin * 2, tile.Height / 2));
+                if (diameter > maxDiameter)
+                    diameter = maxDiameter;
+
+                // A cell too narrow for the full size count gets the smaller
+                // font instead of text spilling out of the circle.
+                if (size.Width > diameter - pad * 2)
+                {
+                    used = smallFont;
+                    size = graphics.MeasureString(text, used,
+                        PointF.Empty, format);
+                    diameter = Math.Max(diameter, Math.Min(maxDiameter,
+                        (int)Math.Ceiling(size.Width) + pad * 2));
+                }
+
+                Rectangle badge = PlaceCountBadge(tile, diameter, scale);
+
+                // The dark halo keeps the accent circle readable on bright
+                // artwork, matching the grid badge.
+                int halo = Math.Max(2, (int)Math.Round(2F * scale));
+                using (var haloBrush = new SolidBrush(
+                    Color.FromArgb(140, 3, 8, 18)))
+                using (var fill = new SolidBrush(AccentColor))
                 using (var textBrush = new SolidBrush(Color.White))
                 {
-                    graphics.FillPath(fill, path);
-                    graphics.DrawString(text, font, textBrush, badge, format);
+                    graphics.FillEllipse(haloBrush,
+                        Rectangle.Inflate(badge, halo, halo));
+                    graphics.FillEllipse(fill, badge);
+                    graphics.DrawString(text, used, textBrush, badge, format);
                 }
             }
         }
@@ -654,24 +734,6 @@ namespace WeissDeckBuilder.Data
             }
 
             return null;
-        }
-
-        private static GraphicsPath CreateRoundedPath(Rectangle bounds,
-            float radius)
-        {
-            var path = new GraphicsPath();
-            float diameter = Math.Min(radius * 2F,
-                Math.Min(bounds.Width, bounds.Height));
-            var arc = new RectangleF(bounds.X, bounds.Y, diameter, diameter);
-            path.AddArc(arc, 180F, 90F);
-            arc.X = bounds.Right - diameter;
-            path.AddArc(arc, 270F, 90F);
-            arc.Y = bounds.Bottom - diameter;
-            path.AddArc(arc, 0F, 90F);
-            arc.X = bounds.Left;
-            path.AddArc(arc, 90F, 90F);
-            path.CloseFigure();
-            return path;
         }
     }
 }
