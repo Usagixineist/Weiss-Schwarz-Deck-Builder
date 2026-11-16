@@ -359,6 +359,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File DeckBuilder\mod\build.ps1
 插件源码、配置说明、同步规则见 [`mod/README.md`](mod/README.md)。所有新增文件都在
 `DeckBuilder\mod` 里，仓库其它目录（含 `wsmod`）不改动。
 
+## 同步到仓库（开发用）
+
+本目录是游戏目录里的工作副本，发布用的仓库在 `<游戏目录>\_repo`。改完代码双击
+`同步到仓库.cmd`，改动就搬进仓库了，下一步直接在 GitHub Desktop 里提交即可。
+
+它实际调用同目录的 `sync-to-repo.ps1`，规则与仓库里的 `tools\sync-from-game.ps1` 完全一致：
+复制 `DeckBuilder`、`BepInEx\plugins`、`BepInEx\config` 三棵树，跳过 `build`、`dist`、
+`tests\dist`、`mod\plugin`、`dumps`、`test-results.txt`、`deck-sync-state.txt`；
+同步完打印 `git status`，并把误入的构建产物 / 日志标红提示。
+
+| 用法 | 结果 |
+| --- | --- |
+| 双击 `同步到仓库.cmd` | 同步 + 列出仓库改动，然后等你在 GitHub Desktop 里提交 |
+| `同步到仓库.cmd -DryRun` | 只打印会复制什么，不复制 |
+| `同步到仓库.cmd -Commit -Message "fix: ..."` | 同步 + 直接提交 |
+| `同步到仓库.cmd -Commit -Push -Message "fix: ..."` | 同步 + 提交 + 推送到 GitHub |
+| `同步到仓库.cmd -RepoRoot D:\other` | 仓库不在 `<游戏目录>\_repo` 时指定位置 |
+
+- 游戏目录默认从脚本所在目录向上找 `Weiss Schwarz.exe`，也可以 `-GameRoot` 指定；
+- 提交用的是本机 git 凭据（GitHub Desktop 登录过就有），不会再弹登录窗；
+- 这两个脚本只给开发用，不在 `package.ps1` 的分发清单里，发布包里没有它们。
+
 ## 打包分发
 
 ```powershell
@@ -382,6 +404,8 @@ DeckBuilder/
   run-tests.ps1             冒烟测试脚本
   install.ps1               安装/校验脚本（定位游戏目录、校验数据、复制插件）
   安装.cmd                  install.ps1 的双击入口
+  sync-to-repo.ps1          把本目录与插件同步到 <游戏目录>\_repo（开发用）
+  同步到仓库.cmd            sync-to-repo.ps1 的双击入口
   package.ps1               生成 dist\WeissDeckBuilder-<版本>.zip
   version.txt               版本号（package.ps1 读这里）
   THIRD_PARTY_NOTICES.md    随程序分发的第三方组件许可

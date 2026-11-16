@@ -95,7 +95,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File DeckBuilder\package.ps1
 
 ## 维护：这个仓库是游戏目录的一份副本
 
-日常开发、构建、打测试都在游戏目录里进行，改完再同步进来：
+日常开发、构建、打测试都在游戏目录里进行，改完再同步进来。
+
+**最省事**：双击 `<游戏目录>\DeckBuilder\同步到仓库.cmd`，同步完会直接列出仓库改动，
+接着在 GitHub Desktop 里 `Changes` → `Commit to main` → `Push origin` 即可；
+想一步到底就运行 `同步到仓库.cmd -Commit -Push -Message "fix: ..."`。
+
+等价的命令行：
 
 ```powershell
 # 先干跑一遍，看看会复制什么
