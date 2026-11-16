@@ -88,11 +88,19 @@ function Invoke-GitText {
     }
 }
 
+# 双击场景下抛异常会打一屏 PowerShell 红字，不如一句人话 + 退出码
+function Fail([string]$Text) {
+    Write-Host ''
+    Write-Host ('[错误] ' + $Text) -ForegroundColor Red
+    exit 1
+}
+
+
 
 # ---- 定位游戏目录 ----
 if ($GameRoot) {
     if (-not (Test-Path -LiteralPath $GameRoot)) {
-        throw "游戏目录不存在：$GameRoot"
+        Fail ('游戏目录不存在：' + $GameRoot)
     }
     $GameRoot = (Resolve-Path -LiteralPath $GameRoot).ProviderPath
 }
@@ -100,13 +108,13 @@ else {
     $GameRoot = Find-GameRootFrom $deckRoot
 }
 if (-not $GameRoot) {
-    throw ("找不到游戏目录（缺 " + $exeName + "）：" + $deckRoot + "`n用 -GameRoot 指定游戏目录。")
+    Fail ('找不到游戏目录（缺 ' + $exeName + '）：' + $deckRoot + '；用 -GameRoot 指定游戏目录。')
 }
 
 # ---- 定位仓库目录：优先"脚本上一级就是仓库"，否则 <游戏目录>\_repo ----
 if ($RepoRoot) {
     if (-not (Test-Path -LiteralPath $RepoRoot)) {
-        throw "仓库目录不存在：$RepoRoot"
+        Fail ('仓库目录不存在：' + $RepoRoot)
     }
     $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath
 }
@@ -120,11 +128,11 @@ else {
     }
 }
 if (-not (Test-Path -LiteralPath (Join-Path $RepoRoot '.git'))) {
-    throw ("不是仓库目录（缺 .git）：" + $RepoRoot + "`n默认应位于 <游戏目录>\_repo，用 -RepoRoot 指定。")
+    Fail ('不是仓库目录（缺 .git）：' + $RepoRoot + '；默认应位于 <游戏目录>\_repo，用 -RepoRoot 指定。')
 }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).ProviderPath
 if ($RepoRoot -eq $GameRoot) {
-    throw "仓库目录不能等于游戏目录：$RepoRoot"
+    Fail ('仓库目录不能等于游戏目录：' + $RepoRoot)
 }
 
 Write-Host ('游戏目录 : ' + $GameRoot)
@@ -153,7 +161,7 @@ else {
         Write-Host ('同步 ' + $source + '  ->  ' + $target)
         robocopy $source $target @flags | Out-Null
         if ($LASTEXITCODE -ge 8) {
-            throw ('robocopy 失败：' + $source + '（exit ' + $LASTEXITCODE + '）')
+            Fail ('robocopy 失败：' + $source + '（exit ' + $LASTEXITCODE + '）')
         }
     }
 }
@@ -200,7 +208,7 @@ if ($suspects.Count -gt 0) {
 if ($Stage -or $Commit) {
     & git -C $RepoRoot add -A
     if ($LASTEXITCODE -ne 0) {
-        throw "git add 失败（exit $LASTEXITCODE）"
+        Fail "git add 失败（exit $LASTEXITCODE）"
     }
     Write-Host ''
     Write-Host '已暂存全部改动（git add -A）。' -ForegroundColor Cyan
@@ -212,7 +220,7 @@ if ($Commit) {
     }
     & git -C $RepoRoot commit -m $Message
     if ($LASTEXITCODE -ne 0) {
-        throw "git commit 失败（exit $LASTEXITCODE）"
+        Fail "git commit 失败（exit $LASTEXITCODE）"
     }
     Write-Host ('已提交：' + $Message) -ForegroundColor Green
 }
@@ -222,7 +230,7 @@ if ($Push) {
     $env:GIT_TERMINAL_PROMPT = '0'
     & git -C $RepoRoot push
     if ($LASTEXITCODE -ne 0) {
-        throw "git push 失败（exit $LASTEXITCODE）：先在 GitHub Desktop 里确认已登录，或检查网络/代理"
+        Fail "git push 失败（exit $LASTEXITCODE）：先在 GitHub Desktop 里确认已登录，或检查网络/代理"
     }
     Write-Host '已推送到 GitHub。' -ForegroundColor Green
 }
