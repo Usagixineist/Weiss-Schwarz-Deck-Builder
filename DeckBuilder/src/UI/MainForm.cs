@@ -52,13 +52,37 @@ namespace WeissDeckBuilder.UI
             CollectionList,
 
             /// <summary>第二级 of 我的收藏: the card list of one series.</summary>
-            CollectionCards
+            CollectionCards,
+
+            /// <summary>
+            /// 第一级 of 编辑卡片: the series covers, the very same grid 系列卡表
+            /// shows, used to pick the series whose cards get edited.
+            /// </summary>
+            CardEditList,
+
+            /// <summary>
+            /// 第二级 of 编辑卡片: the card list of one series. A click opens the
+            /// editor instead of the card detail page.
+            /// </summary>
+            CardEditCards
         }
 
         private enum SeriesSortMode
         {
             Name = 0,
             Abbreviation = 1
+        }
+
+        /// <summary>
+        /// Which sidebar section a sub entry belongs to. Only the sub entries of
+        /// the section that is currently open are unfolded below their parent
+        /// page; every other sub entry folds to zero height.
+        /// </summary>
+        private enum NavSection
+        {
+            None,
+            Deck,
+            CardEdit
         }
 
         private readonly CardDatabase _database;
@@ -310,9 +334,9 @@ namespace WeissDeckBuilder.UI
             _navDeckButton = AddNavItem("卡组编辑", "卡组", "卡组编辑",
                 NavDeckButton_Click);
             _navDeckNewButton = AddNavItem("编辑卡组", "编辑", "编辑卡组",
-                NavDeckNewButton_Click, true);
+                NavDeckNewButton_Click, true, NavSection.Deck);
             _navDeckEditButton = AddNavItem("查看卡组", "查看", "查看卡组",
-                NavDeckEditButton_Click, true);
+                NavDeckEditButton_Click, true, NavSection.Deck);
 
             // 我的收藏 mirrors the series page: the same cover grid, the same
             // card list, but coloured by what the player owns. It sits below
@@ -321,6 +345,17 @@ namespace WeissDeckBuilder.UI
             _navCollectionButton = AddNavItem("我的收藏", "收藏", "我的收藏",
                 NavCollectionButton_Click);
             AddCollectionOwnedOption();
+
+            // 编辑卡片 is the card authoring section: 修改卡片 browses a series
+            // like 系列卡表 and opens the editor on a click, 添加卡片 starts a
+            // blank card right away. Both sub entries only unfold while the
+            // section is open, exactly like the deck tools above.
+            _navCardEditButton = AddNavItem("编辑卡片", "写卡", "编辑卡片",
+                NavCardEditButton_Click);
+            _navCardEditModifyButton = AddNavItem("修改卡片", "修改", "修改卡片",
+                NavCardEditModifyButton_Click, true, NavSection.CardEdit);
+            _navCardEditAddButton = AddNavItem("添加卡片", "添加", "添加卡片",
+                NavCardEditAddButton_Click, true, NavSection.CardEdit);
 
             // Settings stays pinned at the bottom of the sidebar.
             _navSettingsButton = new GearButton();
@@ -344,7 +379,7 @@ namespace WeissDeckBuilder.UI
             _navLayout.Controls.Add(_navSettingsButton, 0, 4);
 
             _navFooter = new Label();
-            _navFooter.Text = "CH-0.6 · 只读数据";
+            _navFooter.Text = "CH-0.6 · 本地数据";
             _navFooter.Dock = DockStyle.Fill;
             _navFooter.ForeColor = AppTheme.TextMuted;
             _navFooter.Font = new Font("Microsoft YaHei UI", 8F,
@@ -376,9 +411,19 @@ namespace WeissDeckBuilder.UI
         private RoundedButton AddNavItem(string text, string compactText,
             string toolTip, EventHandler onClick, bool subItem)
         {
-            // Rows are appended in creation order; extra blocks such as the
-            // series filter keep their own row, so the row index cannot be the
-            // same as the nav item index.
+            return AddNavItem(text, compactText, toolTip, onClick, subItem,
+                NavSection.None);
+        }
+
+        /// <summary>
+        /// Appends a page button to the sidebar. Sub items get a narrower row,
+        /// the smaller caption font and a deeper left indent so the hierarchy
+        /// stays readable when one feature owns several pages.
+        /// </summary>
+        private RoundedButton AddNavItem(string text, string compactText,
+            string toolTip, EventHandler onClick, bool subItem,
+            NavSection section)
+        {
             int index = _navItemsLayout.RowStyles.Count;
             int rowHeight = subItem ? NavSubItemRowHeight : NavItemRowHeight;
             int indent = subItem ? NavSubItemIndent : NavItemIndent;
@@ -414,6 +459,7 @@ namespace WeissDeckBuilder.UI
             item.IsSubItem = subItem;
             item.Indent = indent;
             item.Row = row;
+            item.Section = section;
             _navItems.Add(item);
 
             if (_navToolTip != null && !string.IsNullOrEmpty(toolTip))
@@ -1211,21 +1257,24 @@ namespace WeissDeckBuilder.UI
             }
 
             bool deckPicker = _viewMode == ViewMode.DeckNew;
+            bool cardEdit = _viewMode == ViewMode.CardEditList;
+            string hint = deckPicker
+                ? "选择系列后浏览卡片"
+                : cardEdit
+                    ? (_cardEditAddPending
+                        ? "选择系列后进入编辑界面"
+                        : "选择系列后编辑卡片")
+                    : "单击封面进入卡片列表";
             if (matches.Count == _database.SeriesNames.Count)
             {
                 _contentSubtitle.Text = string.Format(
-                    deckPicker
-                        ? "共 {0} 个系列 · 选择系列后浏览卡片"
-                        : "共 {0} 个系列 · 单击封面进入卡片列表",
-                    matches.Count);
+                    "共 {0} 个系列 · {1}", matches.Count, hint);
             }
             else
             {
                 _contentSubtitle.Text = string.Format(
-                    deckPicker
-                        ? "找到 {0} 个系列（共 {1} 个） · 选择系列后浏览卡片"
-                        : "找到 {0} 个系列（共 {1} 个） · 单击封面进入卡片列表",
-                    matches.Count, _database.SeriesNames.Count);
+                    "找到 {0} 个系列（共 {1} 个） · {2}",
+                    matches.Count, _database.SeriesNames.Count, hint);
             }
         }
 
@@ -1311,6 +1360,7 @@ namespace WeissDeckBuilder.UI
             // page it was started from.
             bool deckPicker = _viewMode == ViewMode.DeckNew;
             bool collection = _viewMode == ViewMode.CollectionList;
+            bool cardEdit = _viewMode == ViewMode.CardEditList;
 
             CloseDeckDetail();
 
@@ -1331,7 +1381,9 @@ namespace WeissDeckBuilder.UI
                     ? ViewMode.DeckNew
                     : collection
                         ? ViewMode.CollectionCards
-                        : ViewMode.CardList;
+                        : cardEdit
+                            ? ViewMode.CardEditCards
+                            : ViewMode.CardList;
 
                 // Opening another series always starts outside the marking
                 // mode; unsaved marks of the previous series are dropped.
@@ -1352,7 +1404,9 @@ namespace WeissDeckBuilder.UI
                     ? _navDeckButton
                     : collection
                         ? _navCollectionButton
-                        : _navSeriesButton);
+                        : cardEdit
+                            ? _navCardEditModifyButton
+                            : _navSeriesButton);
                 ScheduleDarkChrome();
 
                 string folderName = string.IsNullOrEmpty(series.FolderName)
@@ -1361,7 +1415,7 @@ namespace WeissDeckBuilder.UI
                 string abbreviation = series.Abbreviation;
                 if (string.IsNullOrEmpty(abbreviation))
                     abbreviation = folderName;
-                _backButton.Text = deckPicker
+                _backButton.Text = deckPicker || cardEdit
                     ? "←  选择系列"
                     : collection
                         ? "←  我的收藏"
@@ -1369,7 +1423,11 @@ namespace WeissDeckBuilder.UI
                 _seriesTitleLabel.Text = series.Name;
                 _seriesFolderLabel.Text =
                     SeriesSearchService.FormatAbbreviations(series);
-                _contentTitle.Text = deckPicker ? "编辑卡组" : series.Name;
+                _contentTitle.Text = deckPicker
+                    ? "编辑卡组"
+                    : cardEdit
+                        ? "修改卡片"
+                        : series.Name;
                 _contentSubtitle.Text = folderName + " · 正在加载...";
 
                 PopulateSetFilter();
@@ -1379,6 +1437,9 @@ namespace WeissDeckBuilder.UI
                 RunSearch();
                 UpdateNewDeckStripVisibility();
                 UpdateCollectionChrome();
+
+                if (cardEdit)
+                    OnCardEditSeriesOpened(series);
             }
             catch (Exception ex)
             {
@@ -1461,6 +1522,7 @@ namespace WeissDeckBuilder.UI
             {
                 return _viewMode == ViewMode.SeriesList ||
                     _viewMode == ViewMode.CollectionList ||
+                    _viewMode == ViewMode.CardEditList ||
                     (_viewMode == ViewMode.DeckNew && _activeSeries == null);
             }
         }
@@ -1471,11 +1533,24 @@ namespace WeissDeckBuilder.UI
         /// </summary>
         private void SetDeckSubItemsVisible(bool visible)
         {
+            SetNavSubItemsVisible(visible ? NavSection.Deck : NavSection.None);
+        }
+
+        /// <summary>
+        /// Unfolds the sub entries of one section and folds every other one, so
+        /// the two sections that own sub entries (卡组编辑 and 编辑卡片) are never
+        /// unfolded at the same time. <see cref="NavSection.None"/> folds all.
+        /// </summary>
+        private void SetNavSubItemsVisible(NavSection section)
+        {
             for (int i = 0; i < _navItems.Count; i++)
             {
                 NavItem item = _navItems[i];
                 if (!item.IsSubItem)
                     continue;
+
+                bool visible = section != NavSection.None &&
+                    item.Section == section;
 
                 if (item.Row != null)
                     item.Row.Height = visible ? NavSubItemRowHeight : 0F;
@@ -1710,6 +1785,9 @@ namespace WeissDeckBuilder.UI
             /// <summary>Sub entries are indented below their parent page.</summary>
             public bool IsSubItem { get; set; }
             public int Indent { get; set; }
+
+            /// <summary>Section the sub entry unfolds with; None for top pages.</summary>
+            public NavSection Section { get; set; }
 
             /// <summary>Row inside the scrolling item stack, used to collapse it.</summary>
             public RowStyle Row { get; set; }

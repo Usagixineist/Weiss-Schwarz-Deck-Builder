@@ -8,7 +8,8 @@ namespace WeissDeckBuilder.Data
 {
     /// <summary>
     /// Owns the parsed metadata for every series and lazily loads one series'
-    /// card files at a time. Nothing is ever written to the game folder.
+    /// card files at a time. Reading never writes to the game folder; the only
+    /// writer is 编辑卡片, which saves through <see cref="CardDataWriter"/>.
     /// </summary>
     public sealed class CardDatabase
     {

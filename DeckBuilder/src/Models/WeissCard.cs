@@ -15,6 +15,15 @@ namespace WeissDeckBuilder.Models
         public string ImageId { get; set; }
         public string Text { get; set; }
 
+        /// <summary>
+        /// Raw ability code of the card: the ability header lines (Act / Auto /
+        /// Event / ...) plus the braced block, exactly as written in
+        /// CardData.txt. Search never needs it; 编辑卡片 shows it in the lower
+        /// half of the effect box and writes it back unchanged, so the effect
+        /// tree survives a round trip through the editor.
+        /// </summary>
+        public string EffectCode { get; set; }
+
         public int Level { get; set; }
         public int Cost { get; set; }
         public int Power { get; set; }
@@ -47,6 +56,7 @@ namespace WeissDeckBuilder.Models
             JapaneseName = string.Empty;
             ImageId = string.Empty;
             Text = string.Empty;
+            EffectCode = string.Empty;
             Color = CardColor.Undefined;
             Category = CardCategory.Character;
             Trigger = TriggerIcon.None;
@@ -129,6 +139,7 @@ namespace WeissDeckBuilder.Models
             Power = source.Power;
             Soul = source.Soul;
             Text = source.Text;
+            EffectCode = source.EffectCode ?? string.Empty;
             Traits[0] = source.Traits[0];
             Traits[1] = source.Traits[1];
             Traits[2] = source.Traits[2];

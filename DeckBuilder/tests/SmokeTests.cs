@@ -72,7 +72,9 @@ internal static class SmokeTests
             new TestGroup("cardpack", "卡表压缩包导入（ZIP/RAR/7z）", false,
                 db => TestCardPackArchives()),
             new TestGroup("collection", "我的收藏：数量文件与存储", false,
-                db => TestCollectionStore())
+                db => TestCollectionStore()),
+            new TestGroup("cardedit", "编辑卡片：卡块生成、写回与编辑器", false,
+                db => { TestCardEditor(); TestCardEditorOverlay(); })
         };
     }
 
@@ -2696,6 +2698,448 @@ internal static class SmokeTests
     private static WeissCard MakeCard(string id, string name)
     {
         return new WeissCard { Id = id, Name = name };
+    }
+
+    /// <summary>
+    /// 编辑卡片 writes CardData.txt in place. These checks cover the block
+    /// text, a parse round trip, the in-place update and append, the encoding
+    /// and line ending of the surrounding file, and the card art copy.
+    /// </summary>
+    private static void TestCardEditor()
+    {
+        TestCardEditorBlock();
+        TestCardEditorSave();
+        TestCardEditorEncoding();
+        TestCardEditorImage();
+    }
+
+    /// <summary>
+    /// Builds the real editor layer on an STA thread, the same way the import
+    /// overlay test does, so a layout or control mistake fails the suite
+    /// instead of the first user who opens 编辑卡片.
+    /// </summary>
+    private static void TestCardEditorOverlay()
+    {
+        Exception error = null;
+        var worker = new Thread(delegate()
+        {
+            try
+            {
+                TestCardEditorOverlayCore();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        });
+        worker.SetApartmentState(ApartmentState.STA);
+        worker.IsBackground = true;
+        worker.Start();
+        worker.Join();
+        if (error != null)
+            Fail("cardedit editor layer runs without a screen", error.ToString());
+    }
+
+    private static void TestCardEditorOverlayCore()
+    {
+        var series = new SeriesDefinition("测试系列");
+        var folder = CreateTestFolder(Path.GetTempPath());
+        series.Folders.Add(folder);
+
+        CardEditorDraft draft = CardEditorDraft.CreateBlank(series, folder);
+        draft.Id = "TST/09-E001";
+        draft.Name = "编辑器测试";
+        draft.Level = 2;
+        draft.Power = 6000;
+        draft.Trigger = TriggerIcon.Book;
+        draft.EffectCode = "Auto: OnAttack\n{\n        Draw 1\n}";
+
+        using (var overlay = new CardEditorOverlay())
+        {
+            int closings = 0;
+            overlay.CloseRequested += delegate { closings++; };
+            overlay.ShowEditor(draft, null, series.Folders);
+
+            Check("cardedit editor shows the draft",
+                overlay.Draft != null && overlay.Draft.Name == "编辑器测试",
+                overlay.Draft == null ? "null" : overlay.Draft.Name);
+
+            CardEditorDraft read = overlay.ReadDraft();
+            Check("cardedit editor reads the fields back",
+                read != null && read.Id == "TST/09-E001" && read.Level == 2 &&
+                read.Power == 6000 && read.Trigger == TriggerIcon.Book,
+                read == null ? "null" : read.Id + "/" + read.Level);
+            Check("cardedit editor keeps the effect code",
+                read != null && read.EffectCode.Contains("Draw 1"),
+                read == null ? "null" : read.EffectCode);
+
+            FieldInfo codeField = typeof(CardEditorOverlay).GetField("_codeBox",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            var codeBox = codeField == null ? null : codeField.GetValue(overlay) as FieldBox;
+            Check("cardedit editor code box is multiline",
+                codeBox != null && codeBox.Input.Multiline);
+            Check("cardedit editor code box keeps the line breaks",
+                codeBox != null && codeBox.Input.Text.Contains("\r\n"),
+                codeBox == null ? "null" : codeBox.Input.Text);
+
+            // A blank 卡号 must be refused instead of writing a broken block.
+            SetEditorText(overlay, "_idBox", string.Empty);
+            Check("cardedit editor refuses an empty card number",
+                overlay.ReadDraft() == null);
+            SetEditorText(overlay, "_idBox", "TST/09-E001");
+
+            // Lay the layer out at the default window size and paint it once,
+            // so a broken table row or a null control fails here instead of on
+            // the first machine that opens 编辑卡片.
+            overlay.Size = new Size(1400, 900);
+            overlay.CreateControl();
+            overlay.PerformLayout();
+            using (var bitmap = new Bitmap(1400, 900))
+            {
+                overlay.DrawToBitmap(bitmap, new Rectangle(0, 0, 1400, 900));
+                Check("cardedit editor paints without a screen",
+                    bitmap.Width == 1400 && bitmap.Height == 900);
+
+                bool foundPopup = false;
+                Color popup = Color.FromArgb(23, 33, 48);
+                for (int y = 60; y < 860 && !foundPopup; y += 10)
+                {
+                    for (int x = 130; x < 1270 && !foundPopup; x += 10)
+                        foundPopup = bitmap.GetPixel(x, y).ToArgb() == popup.ToArgb();
+                }
+                Check("cardedit editor paints the popup surface", foundPopup);
+            }
+
+            overlay.HideEditor();
+            Check("cardedit editor folds away", !overlay.Visible);
+            Check("cardedit editor did not close itself", closings == 0,
+                "closes=" + closings);
+        }
+    }
+
+    private static void SetEditorText(CardEditorOverlay overlay, string field,
+        string text)
+    {
+        FieldInfo info = typeof(CardEditorOverlay).GetField(field,
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        if (info == null)
+            return;
+
+        var box = info.GetValue(overlay) as FieldBox;
+        if (box != null)
+            box.Input.Text = text;
+    }
+
+    private static CardEditorDraft CreateTestDraft(string id)
+    {
+        var draft = new CardEditorDraft();
+        draft.Id = id;
+        draft.Name = "测试卡";
+        draft.JapaneseName = "テストカード";
+        draft.Category = CardCategory.Character;
+        draft.Color = CardColor.Red;
+        draft.Level = 1;
+        draft.Cost = 0;
+        draft.Power = 5000;
+        draft.Soul = 1;
+        draft.Trigger = TriggerIcon.Soul;
+        draft.Backup = 500;
+        draft.Trait1 = "テスト";
+        draft.Trait2 = "カード";
+        draft.Text = "【自】第一行\n第二行";
+        draft.EffectCode = "Auto: StartClimaxPhase\n{\n        PayCost Clock\n}";
+        return draft;
+    }
+
+    private static SeriesFolder CreateTestFolder(string fullPath)
+    {
+        var folder = new SeriesFolder();
+        folder.SeriesName = "测试系列";
+        folder.FolderPath = "测试系列/S01";
+        folder.Prefix = "TST";
+        folder.SetName = "S01";
+        folder.FullPath = fullPath;
+        folder.FileName = "CardData";
+        return folder;
+    }
+
+    private static List<WeissCard> ParseTestFolder(SeriesFolder folder)
+    {
+        var warnings = new List<string>();
+        return CardDataParser.ParseFile(
+            Path.Combine(folder.FullPath, "CardData.txt"),
+            folder, CommonEffectLibrary.Empty, warnings);
+    }
+
+    private static void TestCardEditorBlock()
+    {
+        CardEditorDraft draft = CreateTestDraft("TST/01-E001");
+        string block = CardDataWriter.BuildBlock(draft);
+
+        Check("cardedit block header",
+            block.StartsWith("Character: TST/01-E001", StringComparison.Ordinal),
+            block);
+        Check("cardedit block name", block.Contains("Name 测试卡"), block);
+        Check("cardedit block color", block.Contains("Color R"), block);
+        Check("cardedit block power", block.Contains("Power 5000"), block);
+        Check("cardedit block trigger", block.Contains("Trigger Soul"), block);
+        Check("cardedit block backup", block.Contains("Backup 500"), block);
+        Check("cardedit block traits", block.Contains("Trait2 カード"), block);
+        Check("cardedit block keeps the effect code",
+            block.Contains("PayCost Clock"), block);
+        Check("cardedit block encodes line breaks",
+            block.Contains("Text 【自】第一行\\n第二行"), block);
+        Check("cardedit block ends with EndCard",
+            block.EndsWith("EndCard", StringComparison.Ordinal), block);
+
+        CardEditorDraft eventDraft = CreateTestDraft("TST/01-E002");
+        eventDraft.Category = CardCategory.Event;
+        Check("cardedit event block drops Power",
+            !CardDataWriter.BuildBlock(eventDraft).Contains("Power "),
+            CardDataWriter.BuildBlock(eventDraft));
+    }
+
+    private static void TestCardEditorSave()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-cardedit-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+
+            // Two cards plus a comment line, CRLF, UTF-8 with BOM.
+            CardEditorDraft first = CreateTestDraft("TST/01-E001");
+            CardEditorDraft second = CreateTestDraft("TST/01-E002");
+            second.Name = "第二张";
+
+            string path = Path.Combine(root, "CardData.txt");
+            string original = "// hand written comment\r\n" +
+                CardDataWriter.BuildBlock(first).Replace("\n", "\r\n") +
+                "\r\n\r\n" +
+                CardDataWriter.BuildBlock(second).Replace("\n", "\r\n") + "\r\n";
+            File.WriteAllText(path, original, new UTF8Encoding(true));
+
+            List<WeissCard> before = ParseTestFolder(folder);
+            Check("cardedit parses the fixture", before.Count == 2,
+                before.Count.ToString());
+            Check("cardedit reads the effect code",
+                before.Count > 0 && before[0].EffectCode.Contains("PayCost Clock"),
+                before.Count > 0 ? before[0].EffectCode : string.Empty);
+
+            // 修改卡片: rename and change the stats of the first card.
+            CardEditorDraft edit = CardEditorDraft.FromCard(before[0], folder);
+            edit.Name = "改名后的卡";
+            edit.Level = 3;
+            edit.Power = 9000;
+            edit.Trigger = TriggerIcon.DoubleSoul;
+            edit.Text = "【起】新的效果";
+            CardWriteResult saved = CardDataWriter.Save(edit);
+            Check("cardedit save succeeds", saved.Success, saved.Message);
+            Check("cardedit save keeps a backup", File.Exists(path + ".bak"),
+                saved.BackupPath);
+
+            string afterText = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit save keeps the comment",
+                afterText.Contains("// hand written comment"), afterText);
+            Check("cardedit save keeps the other card",
+                afterText.Contains("Name 第二张"), afterText);
+            Check("cardedit save keeps CRLF",
+                afterText.Contains("Name 改名后的卡\r\n"), afterText);
+            byte[] savedBytes = File.ReadAllBytes(path);
+            Check("cardedit save keeps the BOM",
+                savedBytes.Length > 3 && savedBytes[0] == 0xEF &&
+                savedBytes[1] == 0xBB && savedBytes[2] == 0xBF,
+                savedBytes.Length.ToString());
+
+            List<WeissCard> after = ParseTestFolder(folder);
+            Check("cardedit save keeps two cards", after.Count == 2,
+                after.Count.ToString());
+            WeissCard updated = after.Count > 0 ? after[0] : null;
+            Check("cardedit save writes the fields",
+                updated != null && updated.Name == "改名后的卡" &&
+                updated.Level == 3 && updated.Power == 9000 &&
+                updated.Trigger == TriggerIcon.DoubleSoul,
+                updated == null ? "null" : updated.Name + "/" + updated.Level);
+            Check("cardedit save keeps the effect code",
+                updated != null && updated.EffectCode.Contains("PayCost Clock"),
+                updated == null ? "null" : updated.EffectCode);
+            Check("cardedit save keeps the new text",
+                updated != null && updated.Text == "【起】新的效果",
+                updated == null ? "null" : updated.Text);
+
+            // 添加卡片: append a third block.
+            CardEditorDraft add = CreateTestDraft("TST/01-E003");
+            add.IsNew = true;
+            add.FolderFullPath = root;
+            add.FileName = "CardData";
+            CardWriteResult added = CardDataWriter.Save(add);
+            Check("cardedit add succeeds", added.Success && added.Added,
+                added.Message);
+            int addedCount = ParseTestFolder(folder).Count;
+            Check("cardedit add appends a block", addedCount == 3,
+                addedCount.ToString());
+
+            // A duplicate card number is refused instead of overwriting.
+            CardEditorDraft duplicate = CreateTestDraft("TST/01-E001");
+            duplicate.IsNew = true;
+            duplicate.FolderFullPath = root;
+            duplicate.FileName = "CardData";
+            CardWriteResult refused = CardDataWriter.Save(duplicate);
+            Check("cardedit refuses a duplicate card number", !refused.Success,
+                refused.Message);
+            int afterRefusal = ParseTestFolder(folder).Count;
+            Check("cardedit refused duplicate keeps the file", afterRefusal == 3,
+                afterRefusal.ToString());
+
+            // 修改卡片 on a card without a block (an AlternateArtwork clone)
+            // must not append a second card behind the player's back.
+            CardEditorDraft ghost = CreateTestDraft("TST/01-E099");
+            ghost.OriginalId = "TST/01-E099";
+            ghost.FolderFullPath = root;
+            ghost.FileName = "CardData";
+            CardWriteResult ghostResult = CardDataWriter.Save(ghost);
+            Check("cardedit refuses a block for a missing card",
+                !ghostResult.Success, ghostResult.Message);
+            int afterGhost = ParseTestFolder(folder).Count;
+            Check("cardedit missing card keeps the file", afterGhost == 3,
+                afterGhost.ToString());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// A card pack file is not always UTF-8 with BOM. Saving one card must not
+    /// rewrite the encoding or the line endings of the cards around it.
+    /// </summary>
+    private static void TestCardEditorEncoding()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-cardedit-enc-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+
+            CardEditorDraft first = CreateTestDraft("TST/02-E001");
+            first.Name = "中文卡片";
+            CardEditorDraft second = CreateTestDraft("TST/02-E002");
+            second.Name = "另一张";
+
+            var utf16 = new UnicodeEncoding(false, true);
+            string path = Path.Combine(root, "CardData.txt");
+            string original =
+                CardDataWriter.BuildBlock(first).Replace("\n", "\r\n") +
+                "\r\n\r\n" +
+                CardDataWriter.BuildBlock(second).Replace("\n", "\r\n") + "\r\n";
+            File.WriteAllBytes(path,
+                utf16.GetPreamble().Concat(utf16.GetBytes(original)).ToArray());
+
+            List<WeissCard> parsed = ParseTestFolder(folder);
+            Check("cardedit utf16 fixture parses", parsed.Count == 2,
+                parsed.Count.ToString());
+
+            CardEditorDraft edit = CardEditorDraft.FromCard(parsed[0], folder);
+            edit.Level = 2;
+            CardWriteResult saved = CardDataWriter.Save(edit);
+            Check("cardedit utf16 save succeeds", saved.Success, saved.Message);
+
+            byte[] bytes = File.ReadAllBytes(path);
+            Check("cardedit utf16 keeps the BOM",
+                bytes.Length > 2 && bytes[0] == 0xFF && bytes[1] == 0xFE,
+                bytes.Length.ToString());
+
+            List<WeissCard> after = ParseTestFolder(folder);
+            Check("cardedit utf16 keeps the other card",
+                after.Count == 2 && after[1].Name == "另一张",
+                after.Count == 2 ? after[1].Name : after.Count.ToString());
+            Check("cardedit utf16 keeps CRLF",
+                utf16.GetString(bytes, 2, bytes.Length - 2)
+                    .Contains("Name 另一张\r\n"),
+                "line ending changed");
+            Check("cardedit utf16 writes the edited level",
+                after.Count > 0 && after[0].Level == 2,
+                after.Count > 0 ? after[0].Level.ToString() : "none");
+
+            // A UTF-8 file without BOM must not grow one.
+            CardEditorDraft plainDraft = CreateTestDraft("TST/02-E003");
+            plainDraft.FileName = "Plain";
+            plainDraft.FolderFullPath = root;
+            File.WriteAllText(Path.Combine(root, "Plain.txt"),
+                CardDataWriter.BuildBlock(plainDraft) + "\n",
+                new UTF8Encoding(false));
+            plainDraft.Name = "无 BOM";
+            plainDraft.OriginalId = "TST/02-E003";
+            CardWriteResult plainSaved = CardDataWriter.Save(plainDraft);
+            Check("cardedit plain save succeeds", plainSaved.Success,
+                plainSaved.Message);
+            byte[] plainBytes = File.ReadAllBytes(Path.Combine(root, "Plain.txt"));
+            Check("cardedit plain save keeps the file BOM free",
+                plainBytes.Length > 0 && plainBytes[0] != 0xEF,
+                plainBytes.Length.ToString());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    private static void TestCardEditorImage()
+    {
+        Check("cardedit image name normalizes the card number",
+            CardDataWriter.NormalizeImageBaseName("AW/S18-E101") == "AW_S18_E101",
+            CardDataWriter.NormalizeImageBaseName("AW/S18-E101"));
+        Check("cardedit image name drops the extension",
+            CardDataWriter.NormalizeImageBaseName("AW_S18_E101.png") ==
+                "AW_S18_E101",
+            CardDataWriter.NormalizeImageBaseName("AW_S18_E101.png"));
+
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-cardedit-img-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            string source = Path.Combine(root, "drop.png");
+            string folder = Path.Combine(root, "S01");
+            File.WriteAllBytes(source, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+
+            string copied = CardDataWriter.CopyImage(source, folder, "TST/03-E001");
+            Check("cardedit image is copied",
+                copied != null && File.Exists(copied) &&
+                Path.GetFileName(copied) == "TST_03_E001.png",
+                copied ?? "null");
+
+            string notAnImage = Path.Combine(root, "bad.txt");
+            File.WriteAllText(notAnImage, "not an image");
+            Check("cardedit rejects a non image",
+                CardDataWriter.CopyImage(notAnImage, folder, "TST/03-E002") == null);
+
+            CardEditorDraft draft = CreateTestDraft("TST/03-E003");
+            draft.IsNew = true;
+            draft.FolderFullPath = folder;
+            draft.FileName = "CardData";
+            draft.ImageSourcePath = source;
+            CardWriteResult saved = CardDataWriter.Save(draft);
+            Check("cardedit save copies the dropped image",
+                saved.Success && File.Exists(saved.ImagePath), saved.Message);
+
+            string blockPath = Path.Combine(folder, "CardData.txt");
+            string block = File.Exists(blockPath)
+                ? File.ReadAllText(blockPath, Encoding.UTF8)
+                : string.Empty;
+            Check("cardedit save records the image id",
+                block.Contains("Image TST_03_E003"), block);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
     }
 
     private static void Check(string name, bool condition, string detail = null)

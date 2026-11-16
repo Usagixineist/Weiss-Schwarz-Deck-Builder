@@ -108,19 +108,33 @@ namespace WeissDeckBuilder.UI
         /// </summary>
         private void UpdateNavGroupStates(RoundedButton selected)
         {
-            if (_navDeckButton == null)
+            SetNavGroupEmphasis(_navDeckButton, selected,
+                _navDeckNewButton, _navDeckEditButton);
+            SetNavGroupEmphasis(_navCardEditButton, selected,
+                _navCardEditModifyButton, _navCardEditAddButton);
+        }
+
+        /// <summary>
+        /// A section label turns white while one of its children is the active
+        /// page. The label itself never draws the selected box, so only one
+        /// entry at a time looks active.
+        /// </summary>
+        private static void SetNavGroupEmphasis(RoundedButton group,
+            RoundedButton selected, RoundedButton first, RoundedButton second)
+        {
+            if (group == null)
                 return;
 
-            bool sectionActive = ReferenceEquals(selected, _navDeckNewButton) ||
-                ReferenceEquals(selected, _navDeckEditButton) ||
-                ReferenceEquals(selected, _navDeckButton);
-            Color color = sectionActive ? Color.White : AppTheme.TextSoft;
-            if (!_navDeckButton.Selected && _navDeckButton.ForeColor == color)
+            bool active = ReferenceEquals(selected, group) ||
+                ReferenceEquals(selected, first) ||
+                ReferenceEquals(selected, second);
+            Color color = active ? Color.White : AppTheme.TextSoft;
+            if (!group.Selected && group.ForeColor == color)
                 return;
 
-            _navDeckButton.Selected = false;
-            _navDeckButton.ForeColor = color;
-            _navDeckButton.Invalidate();
+            group.Selected = false;
+            group.ForeColor = color;
+            group.Invalidate();
         }
 
         private void NavDeckButton_Click(object sender, EventArgs e)

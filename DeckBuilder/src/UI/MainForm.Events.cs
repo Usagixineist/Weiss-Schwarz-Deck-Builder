@@ -45,6 +45,8 @@ namespace WeissDeckBuilder.UI
                 ShowDeckNew();
             else if (_viewMode == ViewMode.CollectionCards)
                 ShowCollection();
+            else if (_viewMode == ViewMode.CardEditCards)
+                ShowCardEdit();
             else
                 ShowSeriesList();
         }
@@ -56,6 +58,7 @@ namespace WeissDeckBuilder.UI
 
             if (_viewMode == ViewMode.SeriesList ||
                 _viewMode == ViewMode.CollectionList ||
+                _viewMode == ViewMode.CardEditList ||
                 (_viewMode == ViewMode.DeckNew && _activeSeries == null))
             {
                 SeriesDefinition series = e.Item.Tag as SeriesDefinition;
@@ -69,6 +72,16 @@ namespace WeissDeckBuilder.UI
                 WeissCard card = e.Item.Tag as WeissCard;
                 if (card != null)
                     ShowCardDetail(card);
+                return;
+            }
+
+            if (_viewMode == ViewMode.CardEditCards)
+            {
+                // 修改卡片 opens the editor instead of the read-only detail
+                // page; the card itself stays the single source of the fields.
+                WeissCard card = e.Item.Tag as WeissCard;
+                if (card != null)
+                    ShowCardEditor(card);
                 return;
             }
 
@@ -429,7 +442,8 @@ namespace WeissDeckBuilder.UI
         {
             bool browsing = _viewMode == ViewMode.CardList ||
                 _viewMode == ViewMode.DeckNew ||
-                _viewMode == ViewMode.CollectionCards;
+                _viewMode == ViewMode.CollectionCards ||
+                _viewMode == ViewMode.CardEditCards;
             if (_populatingCombos || !browsing || _activeSeries == null)
             {
                 return;

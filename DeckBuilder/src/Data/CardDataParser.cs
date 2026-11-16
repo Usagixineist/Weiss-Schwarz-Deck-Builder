@@ -44,16 +44,26 @@ namespace WeissDeckBuilder.Data
         public CardCategory Category { get; set; }
         public List<CardCommand> Commands { get; private set; }
 
+        /// <summary>
+        /// Ability header lines and the braced block, kept verbatim. They are
+        /// skipped while search data is built but 编辑卡片 shows them as the
+        /// 效果代码 half of the effect box, so they must not be lost.
+        /// </summary>
+        public List<string> EffectLines { get; private set; }
+
         public CardDefinition()
         {
             Id = string.Empty;
             Commands = new List<CardCommand>();
+            EffectLines = new List<string>();
         }
     }
 
     /// <summary>
-    /// Parser for CardData.txt. Effect blocks are skipped while top-level
-    /// commands and CommonEffects.txt shorthand are converted into card data.
+    /// Parser for CardData.txt. Top-level commands and CommonEffects.txt
+    /// shorthand are converted into card data; the ability header lines and the
+    /// braced effect block are kept verbatim on
+    /// <see cref="WeissCard.EffectCode"/> so 编辑卡片 can show and rewrite them.
     /// </summary>
     public static class CardDataParser
     {
@@ -158,19 +168,24 @@ namespace WeissDeckBuilder.Data
 
                     if (trimmed.StartsWith("{", StringComparison.Ordinal))
                     {
+                        current.EffectLines.Add(line);
                         depth++;
                         continue;
                     }
 
                     if (trimmed.StartsWith("}", StringComparison.Ordinal))
                     {
+                        current.EffectLines.Add(line);
                         if (depth > 0)
                             depth--;
                         continue;
                     }
 
                     if (depth != 0)
+                    {
+                        current.EffectLines.Add(line);
                         continue;
+                    }
 
                     if (string.Equals(trimmed, "EndCard", StringComparison.OrdinalIgnoreCase))
                     {
@@ -240,6 +255,12 @@ namespace WeissDeckBuilder.Data
                             break;
                         case "customtriggericon":
                             AddNumberCommand(current, CardCommandKind.CustomTriggerIcon, value);
+                            break;
+                        default:
+                            // Ability headers such as "Act: Rest 2 ..." or
+                            // "Auto: ..." are not card fields: they open the
+                            // effect tree and belong to 效果代码.
+                            current.EffectLines.Add(line);
                             break;
                     }
                 }
@@ -398,6 +419,9 @@ namespace WeissDeckBuilder.Data
             card.SeriesName = folder.SeriesName;
             card.SetName = folder.SetName;
             card.FolderPath = folder.FolderPath;
+            card.EffectCode = definition.EffectLines.Count == 0
+                ? string.Empty
+                : string.Join("\n", definition.EffectLines.ToArray());
 
             for (int i = 0; i < definition.Commands.Count; i++)
             {

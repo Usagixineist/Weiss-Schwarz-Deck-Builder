@@ -58,6 +58,9 @@ $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\ThemeControls.cs')
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\ThumbnailCache.cs')
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\DeckImportTilesControl.cs')
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\DeckImportOverlay.cs')
+# 编辑卡片 builds its layer headlessly as well, so the layout and the
+# draft round trip are covered without opening a window.
+$sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\CardEditorOverlay.cs')
 # The deck-sync plugin's pure helpers live with the plugin so the DeckBuilder
 # folder stays self-contained; they are compiled here so they stay tested.
 $sourceFiles += Get-Item -LiteralPath (Join-Path $projectRoot 'mod\src\DeckSyncPlanner.cs')
