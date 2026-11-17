@@ -758,8 +758,22 @@ namespace WeissDeckBuilder.UI
     }
 
     /// <summary>
+    /// Picture painted by <see cref="GearButton"/>. Both shapes are drawn with
+    /// GDI primitives, so the sidebar needs no image assets.
+    /// </summary>
+    internal enum SidebarIcon
+    {
+        /// <summary>Gear, used by the pinned 设置 entry.</summary>
+        Gear,
+
+        /// <summary>Play triangle, used by the 启动游戏 entry.</summary>
+        Play
+    }
+
+    /// <summary>
     /// Square icon-only button used by the sidebar. The picture is painted with
-    /// GDI primitives (a gear) so the toolbar needs no image assets.
+    /// GDI primitives (a gear or a play triangle) so the toolbar needs no image
+    /// assets.
     /// </summary>
     internal sealed class GearButton : Button
     {
@@ -771,6 +785,7 @@ namespace WeissDeckBuilder.UI
         public int CornerRadius { get; set; }
         public int IconSize { get; set; }
         public int IconTextGap { get; set; }
+        public SidebarIcon Icon { get; set; }
         public bool ShowText { get; set; }
         public bool IsActive { get; set; }
         public Color SurfaceColor { get; set; }
@@ -790,6 +805,7 @@ namespace WeissDeckBuilder.UI
             CornerRadius = 10;
             IconSize = 20;
             IconTextGap = 10;
+            Icon = SidebarIcon.Gear;
             ShowText = false;
             IsActive = false;
             SurfaceColor = Color.Empty;
@@ -892,7 +908,7 @@ namespace WeissDeckBuilder.UI
                 }
             }
 
-            DrawGear(e.Graphics, iconBounds, iconColor);
+            DrawIcon(e.Graphics, iconBounds, iconColor);
 
             if (textBounds != Rectangle.Empty)
             {
@@ -900,6 +916,18 @@ namespace WeissDeckBuilder.UI
                     iconColor, TextFormatFlags.VerticalCenter |
                     TextFormatFlags.NoPrefix | TextFormatFlags.Left);
             }
+        }
+
+        /// <summary>
+        /// Paints the shape selected by <see cref="Icon"/>; the settings entry
+        /// keeps the gear, the launch entry shows a play triangle.
+        /// </summary>
+        private void DrawIcon(Graphics graphics, Rectangle bounds, Color color)
+        {
+            if (Icon == SidebarIcon.Play)
+                DrawPlay(graphics, bounds, color);
+            else
+                DrawGear(graphics, bounds, color);
         }
 
         private void DrawGear(Graphics graphics, Rectangle bounds, Color color)
@@ -938,6 +966,37 @@ namespace WeissDeckBuilder.UI
                 float hub = ring * 0.34F;
                 graphics.DrawEllipse(ringPen,
                     centerX - hub, centerY - hub, hub * 2F, hub * 2F);
+            }
+        }
+
+        /// <summary>
+        /// Play triangle for the launch entry. Stroked like the gear so both
+        /// sidebar icons share the same weight on every background.
+        /// </summary>
+        private void DrawPlay(Graphics graphics, Rectangle bounds, Color color)
+        {
+            float size = Math.Min(IconSize,
+                Math.Min(bounds.Width, bounds.Height) - 8);
+            if (size < 8F)
+                return;
+
+            float centerX = bounds.Left + bounds.Width / 2F;
+            float centerY = bounds.Top + bounds.Height / 2F;
+            float half = size / 2F;
+            float left = centerX - half * 0.72F;
+            float tip = centerX + half * 0.92F;
+
+            var points = new[]
+            {
+                new PointF(left, centerY - half),
+                new PointF(tip, centerY),
+                new PointF(left, centerY + half)
+            };
+
+            using (var pen = new Pen(color, 1.9F))
+            {
+                pen.LineJoin = LineJoin.Round;
+                graphics.DrawPolygon(pen, points);
             }
         }
 

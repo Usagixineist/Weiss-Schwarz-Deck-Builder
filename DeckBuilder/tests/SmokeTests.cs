@@ -75,7 +75,9 @@ internal static class SmokeTests
             new TestGroup("collection", "我的收藏：数量文件与存储", false,
                 db => TestCollectionStore()),
             new TestGroup("cardedit", "编辑卡片：卡块生成、写回与编辑器", false,
-                db => { TestCardEditor(); TestCardEditorPage(); })
+                db => { TestCardEditor(); TestCardEditorPage(); }),
+            new TestGroup("launcher", "启动游戏：定位游戏目录与不热更参数", true,
+                db => TestGameLauncher(db))
         };
     }
 
@@ -3452,6 +3454,104 @@ internal static class SmokeTests
                 : string.Empty;
             Check("cardedit save records the image id",
                 block.Contains("Image TST_03_E003"), block);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// 启动游戏 entry: the exe is found by walking up from the card data folder
+    /// and started with the same `noUpdate` argument as 不热更启动游戏.lnk, so the
+    /// bundled updater never rewrites the card table this app edits. Nothing
+    /// here starts a process, so the group is safe to run unattended.
+    /// </summary>
+    private static void TestGameLauncher(Func<CardDatabase> db)
+    {
+        string dataRoot = db().DataRoot;
+        string gameRoot = GameLauncher.FindGameRoot(dataRoot);
+        Check("launcher finds the game root",
+            !string.IsNullOrEmpty(gameRoot) &&
+            File.Exists(Path.Combine(gameRoot, GameLauncher.ExeName)),
+            gameRoot ?? "null");
+
+        string error;
+        GameLaunchTarget target = GameLauncher.Resolve(dataRoot, out error);
+        Check("launcher resolves the exe",
+            target != null && File.Exists(target.ExePath),
+            error ?? "no target");
+        Check("launcher passes noUpdate",
+            target != null && target.Arguments == GameLauncher.NoUpdateArgument,
+            target == null ? "no target" : target.Arguments);
+        Check("launcher runs from the game root",
+            target != null &&
+            string.Equals(Path.GetDirectoryName(target.ExePath), target.GameRoot,
+                StringComparison.OrdinalIgnoreCase) &&
+            Directory.Exists(target.GameRoot),
+            target == null ? "no target" : target.GameRoot);
+        Check("launcher refuses a missing target",
+            !GameLauncher.TryLaunch(null, out error) &&
+            !string.IsNullOrEmpty(error),
+            error ?? "no error");
+
+        // A fake install laid out like the real one, plus a sibling folder with
+        // no exe at all: the first must resolve, the second must explain.
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-launcher-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string install = Path.Combine(root, "install");
+            string nested = Path.Combine(install, "Weiss Schwarz_Data",
+                "StreamingAssets", "Cards");
+            Directory.CreateDirectory(nested);
+            File.WriteAllText(Path.Combine(install, GameLauncher.ExeName),
+                string.Empty);
+
+            string climbed = GameLauncher.FindGameRoot(nested);
+            Check("launcher climbs to the install root",
+                string.Equals(climbed, install, StringComparison.OrdinalIgnoreCase),
+                climbed ?? "null");
+
+            GameLaunchTarget nestedTarget =
+                GameLauncher.Resolve(nested, out error);
+            Check("launcher resolves a nested data folder",
+                nestedTarget != null &&
+                string.Equals(nestedTarget.GameRoot, install,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(nestedTarget.ExePath,
+                    Path.Combine(install, GameLauncher.ExeName),
+                    StringComparison.OrdinalIgnoreCase),
+                nestedTarget == null ? (error ?? "no target") :
+                    nestedTarget.ExePath);
+
+            string noGame = Path.Combine(root, "no-game");
+            Directory.CreateDirectory(noGame);
+            GameLaunchTarget missing = GameLauncher.Resolve(noGame, out error);
+            Check("launcher explains a missing exe",
+                missing == null && !string.IsNullOrEmpty(error) &&
+                error.Contains(GameLauncher.ExeName) && error.Contains("找不到"),
+                error ?? "no error");
+
+            // WS_GAME_EXE points the entry at an install outside the tree.
+            string previous =
+                Environment.GetEnvironmentVariable(GameLauncher.ExePathVariable);
+            try
+            {
+                Environment.SetEnvironmentVariable(GameLauncher.ExePathVariable,
+                    Path.Combine(install, GameLauncher.ExeName));
+                string overridden = GameLauncher.FindGameRoot(noGame);
+                Check("launcher honours WS_GAME_EXE",
+                    string.Equals(overridden, install,
+                        StringComparison.OrdinalIgnoreCase),
+                    overridden ?? "null");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(GameLauncher.ExePathVariable,
+                    previous);
+            }
         }
         finally
         {

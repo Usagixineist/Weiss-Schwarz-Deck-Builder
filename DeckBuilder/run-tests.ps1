@@ -50,6 +50,9 @@ $sourceFiles += Get-ChildItem -LiteralPath (Join-Path $src 'Models') -Filter '*.
 $sourceFiles += Get-ChildItem -LiteralPath (Join-Path $src 'Data') -Filter '*.cs' -File
 $sourceFiles += Get-ChildItem -LiteralPath (Join-Path $src 'Search') -Filter '*.cs' -File
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'Infrastructure\DataPathResolver.cs')
+# 启动游戏 walks up from the data folder to the exe and passes `noUpdate`; the
+# lookup and the argument are pure enough to check headlessly.
+$sourceFiles += Get-Item -LiteralPath (Join-Path $src 'Infrastructure\GameLauncher.cs')
 # The 导入卡组 layer is checked headless: its two-click delete and its Escape
 # order must not depend on which child control holds the focus, so the test
 # builds the layer itself and only the sources it needs are compiled in.

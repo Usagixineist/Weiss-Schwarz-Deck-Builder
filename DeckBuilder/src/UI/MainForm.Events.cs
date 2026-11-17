@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using WeissDeckBuilder.Data;
+using WeissDeckBuilder.Infrastructure;
 using WeissDeckBuilder.Models;
 using WeissDeckBuilder.Search;
 
@@ -34,6 +35,38 @@ namespace WeissDeckBuilder.UI
         {
             if (_viewMode != ViewMode.Settings)
                 ShowSettings();
+        }
+
+        /// <summary>
+        /// 启动游戏 hands the exe the `noUpdate` argument, exactly like
+        /// 不热更启动游戏.lnk, so the bundled updater never rewrites the card
+        /// table this app edits. The DeckBuilder window stays open and the game
+        /// window comes up on top of it.
+        /// </summary>
+        private void NavLaunchGameButton_Click(object sender, EventArgs e)
+        {
+            if (GameLauncher.IsRunning())
+            {
+                MessageBox.Show(this, "游戏已经在运行。", "启动游戏",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            string error;
+            GameLaunchTarget target = GameLauncher.Resolve(
+                _database == null ? null : _database.DataRoot, out error);
+            if (target == null)
+            {
+                MessageBox.Show(this, error, "启动游戏",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            if (!GameLauncher.TryLaunch(target, out error))
+            {
+                MessageBox.Show(this, error, "启动游戏",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void BackButton_Click(object sender, EventArgs e)

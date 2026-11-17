@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
 using WeissDeckBuilder.Data;
+using WeissDeckBuilder.Infrastructure;
 using WeissDeckBuilder.Models;
 using WeissDeckBuilder.Search;
 
@@ -16,6 +17,8 @@ namespace WeissDeckBuilder.UI
         private const int NavItemIndent = 10;
         private const int NavSubItemIndent = 26;
         private const int NavSettingsRowHeight = 46;
+        // 启动游戏 sits directly above 设置 and shares its 46px row.
+        private const int NavLaunchRowHeight = 46;
         private const int NavFooterRowHeight = 34;
 
         // The series search is pinned in the sidebar above the page buttons,
@@ -127,6 +130,7 @@ namespace WeissDeckBuilder.UI
         private RoundedButton _navSearchButton;
         private RoundedButton _navSeriesButton;
         private GearButton _navSettingsButton;
+        private GearButton _navLaunchGameButton;
         private ToolTip _navToolTip;
         private Panel _contentHost;
         private Panel _browsePage;
@@ -252,7 +256,8 @@ namespace WeissDeckBuilder.UI
 
         /// <summary>
         /// Sidebar frame: brand block, a growing list of top-level pages, the
-        /// settings entry pinned above the footer and the version footer.
+        /// 启动游戏 and 设置 entries pinned above the footer and the version
+        /// footer.
         /// </summary>
         private Control BuildNavPanel()
         {
@@ -264,7 +269,7 @@ namespace WeissDeckBuilder.UI
             _navLayout = new TableLayoutPanel();
             _navLayout.Dock = DockStyle.Fill;
             _navLayout.ColumnCount = 1;
-            _navLayout.RowCount = 6;
+            _navLayout.RowCount = 7;
             _navLayout.BackColor = NavSurfaceColor;
             _navLayout.Margin = new Padding(0);
             _navLayout.Padding = new Padding(0);
@@ -275,6 +280,7 @@ namespace WeissDeckBuilder.UI
             _navItemsRow = new RowStyle(SizeType.Absolute, NavItemRowHeight);
             _navLayout.RowStyles.Add(_navItemsRow);
             _navLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            _navLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, NavLaunchRowHeight));
             _navLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, NavSettingsRowHeight));
             _navLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, NavFooterRowHeight));
             _navLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
@@ -363,26 +369,30 @@ namespace WeissDeckBuilder.UI
             _navCardEditAddButton = AddNavItem("添加卡片", "添加", "添加卡片",
                 NavCardEditAddButton_Click, true, NavSection.CardEdit);
 
-            // Settings stays pinned at the bottom of the sidebar.
-            _navSettingsButton = new GearButton();
-            _navSettingsButton.Text = "设置";
-            _navSettingsButton.AccessibleName = "设置";
-            _navSettingsButton.Dock = DockStyle.Fill;
-            _navSettingsButton.CornerRadius = 10;
-            _navSettingsButton.IconSize = 20;
-            _navSettingsButton.SurfaceColor = NavSurfaceColor;
-            _navSettingsButton.NormalColor = Color.Transparent;
-            _navSettingsButton.HoverColor = NavItemHoverColor;
-            _navSettingsButton.PressedColor = NavItemPressedColor;
-            _navSettingsButton.ActiveColor = NavItemHoverColor;
-            _navSettingsButton.Font = _navItemFont;
-            _navSettingsButton.ForeColor = AppTheme.TextSoft;
-            _navSettingsButton.TextAlign = ContentAlignment.MiddleLeft;
-            _navSettingsButton.Padding = new Padding(10, 0, 0, 0);
-            _navSettingsButton.Margin = new Padding(0, 0, 0, 6);
+            // Both pinned entries live at the bottom of the sidebar: 启动游戏
+            // starts the game with the noUpdate argument (the same thing
+            // 不热更启动游戏.lnk does), 设置 opens the settings page.
+            _navLaunchGameButton = CreatePinnedNavButton("启动游戏",
+                SidebarIcon.Play, "启动游戏（跳过自动更新）");
+            _navLaunchGameButton.Click += NavLaunchGameButton_Click;
+            _navLayout.Controls.Add(_navLaunchGameButton, 0, 4);
+
+            // Grey the entry out when the data folder is not inside a game
+            // install, so a missing exe shows up before the click.
+            string launchError;
+            if (GameLauncher.Resolve(_database == null ? null : _database.DataRoot,
+                out launchError) == null)
+            {
+                _navLaunchGameButton.Enabled = false;
+                _navToolTip.SetToolTip(_navLaunchGameButton,
+                    "找不到 " + GameLauncher.ExeName + "（用 --data 或环境变量 " +
+                    GameLauncher.ExePathVariable + " 指定游戏位置）");
+            }
+
+            _navSettingsButton = CreatePinnedNavButton("设置",
+                SidebarIcon.Gear, "设置");
             _navSettingsButton.Click += NavSettingsButton_Click;
-            _navToolTip.SetToolTip(_navSettingsButton, "设置");
-            _navLayout.Controls.Add(_navSettingsButton, 0, 4);
+            _navLayout.Controls.Add(_navSettingsButton, 0, 5);
 
             _navFooter = new Label();
             _navFooter.Text = "CH-0.6 · 本地数据";
@@ -392,10 +402,39 @@ namespace WeissDeckBuilder.UI
                 FontStyle.Regular, GraphicsUnit.Point, 134);
             _navFooter.TextAlign = ContentAlignment.BottomLeft;
             _navFooter.Margin = new Padding(4, 0, 4, 0);
-            _navLayout.Controls.Add(_navFooter, 0, 5);
+            _navLayout.Controls.Add(_navFooter, 0, 6);
 
             panel.Controls.Add(_navLayout);
             return panel;
+        }
+
+        /// <summary>
+        /// Builds one of the pinned bottom entries. They keep their label while
+        /// the rail is expanded and fold to the icon alone at 72px, which is why
+        /// they need the custom drawn icon instead of a text-only button.
+        /// </summary>
+        private GearButton CreatePinnedNavButton(string text, SidebarIcon icon,
+            string toolTip)
+        {
+            var button = new GearButton();
+            button.Text = text;
+            button.AccessibleName = text;
+            button.Icon = icon;
+            button.Dock = DockStyle.Fill;
+            button.CornerRadius = 10;
+            button.IconSize = 20;
+            button.SurfaceColor = NavSurfaceColor;
+            button.NormalColor = Color.Transparent;
+            button.HoverColor = NavItemHoverColor;
+            button.PressedColor = NavItemPressedColor;
+            button.ActiveColor = NavItemHoverColor;
+            button.Font = _navItemFont;
+            button.ForeColor = AppTheme.TextSoft;
+            button.TextAlign = ContentAlignment.MiddleLeft;
+            button.Padding = new Padding(10, 0, 0, 0);
+            button.Margin = new Padding(0, 0, 0, 6);
+            _navToolTip.SetToolTip(button, toolTip);
+            return button;
         }
 
         /// <summary>
@@ -495,7 +534,7 @@ namespace WeissDeckBuilder.UI
                 ? 0
                 : (int)_navSearchRow.Height;
             int reserved = NavBrandRowHeight + searchHeight +
-                NavSettingsRowHeight + NavFooterRowHeight;
+                NavLaunchRowHeight + NavSettingsRowHeight + NavFooterRowHeight;
             int available = _navLayout.ClientSize.Height - reserved;
             int rowHeight = Math.Min(itemsHeight,
                 Math.Max(NavItemRowHeight, available));
@@ -1506,6 +1545,19 @@ namespace WeissDeckBuilder.UI
                     ? new Padding(10, 0, 0, 0)
                     : new Padding(0);
                 _navSettingsButton.Invalidate();
+            }
+
+            // The launch entry folds the same way: icon only at 72px.
+            if (_navLaunchGameButton != null)
+            {
+                _navLaunchGameButton.ShowText = expanded;
+                _navLaunchGameButton.TextAlign = expanded
+                    ? ContentAlignment.MiddleLeft
+                    : ContentAlignment.MiddleCenter;
+                _navLaunchGameButton.Padding = expanded
+                    ? new Padding(10, 0, 0, 0)
+                    : new Padding(0);
+                _navLaunchGameButton.Invalidate();
             }
 
             UpdateNavLayoutMetrics();

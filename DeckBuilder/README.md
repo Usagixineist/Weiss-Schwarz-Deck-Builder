@@ -40,6 +40,13 @@ DeckBuilder\dist\WeissDeckBuilder.exe
 .\DeckBuilder\dist\WeissDeckBuilder.exe --data "E:\Weiss Schwarz CH-0.6\Weiss Schwarz_Data\StreamingAssets"
 ```
 
+左侧导航最下方的「启动游戏」（在「设置」上方）用 `noUpdate` 参数启动同目录的
+`Weiss Schwarz.exe`，效果和双击 `不热更启动游戏.lnk` 完全一致：游戏不会去跑
+`更新卡牌数据.exe`，卡表不会被自动更新覆写，刚写好的卡牌可以直接进游戏验证。
+启动后 DeckBuilder 保持打开；游戏已经在运行时只弹一句提示，不会开第二个进程；
+找不到 exe 时这个入口直接变灰，用 `--data` 或环境变量 `WS_GAME_EXE`
+（指向 exe 的完整路径）可以告诉它游戏在哪。
+
 ## 安装（换电脑 / 给朋友用）
 
 发布包解压后就是一个 `DeckBuilder` 文件夹：把它放到游戏目录里（和 `Weiss Schwarz.exe` 同一层），
@@ -152,9 +159,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\run-tests.
 | `cardpack` | ZIP / RAR / 7z 卡表压缩包安装（含固实包） | 否 |
 | `collection` | 我的收藏：卡包数量文件的读写、排序与统计 | 否 |
 | `cardedit` | 编辑卡片：卡块生成、写回与编辑器 | 否 |
+| `launcher` | 启动游戏：定位游戏目录与不热更参数 | 是 |
 
-当前结果：**454 项通过，0 项失败**（`-Group import` 20 项、`-Group export` 22 项，
-`-Group cardpack` 为 45 项，`-Group collection` 为 17 项，`-Group cardedit` 为 85 项）。测试报告写入
+当前结果：**468 项通过，0 项失败**（`-Group import` 20 项、`-Group export` 22 项，
+`-Group cardpack` 为 45 项，`-Group collection` 为 17 项，`-Group cardedit` 为 85 项，
+`-Group launcher` 为 9 项）。测试报告写入
 `DeckBuilder\tests\test-results.txt`。
 
 新增功能时在 `BuildGroups()` 里加一组（或挂到已有组），只写这块的断言，改完跑
@@ -186,6 +195,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\run-tests.
   两张 PNG 实际写出且带 PNG 签名，以及 PDF 的对象结构（每页一个 page 对象、页树计
   数、`DCTDecode` JPEG、交叉引用表、水印、9 张/页上限与空路径拒绝）
 - 卡表压缩包安装：ZIP、普通/固实 RAR、普通/固实 7z 的中文系列名、卡数与解出文件
+- 启动游戏：从卡表目录向上定位 `Weiss Schwarz.exe`、`noUpdate` 参数、以游戏根目录作
+  工作目录、找不到 exe 时的提示文本、`WS_GAME_EXE` 覆盖（测试只解析路径，不会真的
+  启动游戏）
 - 我的收藏：`MyCollocation` 目录定位、卡包文件名清洗、按卡号排序写盘、零数/空白/超上限
   的清理、注释与坏行的容错、`code count` 单行格式、卡包清空后删文件、系列级“是否拥有”
   与种数/张数统计
@@ -228,7 +240,7 @@ README 展示，不是测试产物。
 
 ### 第一级：系列封面
 
-- 左侧导航宽 180px，自上而下为 `Weiss\nSchwarz` 标识、系列搜索栏（标题“系列搜索”、圆角输入框、“排序”单选与结果计数）、“系列卡表”入口、“卡组编辑”入口（展开时其下多两行“编辑卡组”“查看卡组”）、最下方的“我的收藏”入口（展开时其下多一行“只显示拥有”）与“编辑卡片”入口（展开时其下多两行“修改卡片”“添加卡片”）；未进入对应页面时，搜索栏、收藏选项、卡组子项与写卡子项自动隐藏。
+- 左侧导航宽 180px，自上而下为 `Weiss\nSchwarz` 标识、系列搜索栏（标题“系列搜索”、圆角输入框、“排序”单选与结果计数）、“系列卡表”入口、“卡组编辑”入口（展开时其下多两行“编辑卡组”“查看卡组”）、最下方的“我的收藏”入口（展开时其下多一行“只显示拥有”）与“编辑卡片”入口（展开时其下多两行“修改卡片”“添加卡片”），最底部固定两行“启动游戏”与“设置”；未进入对应页面时，搜索栏、收藏选项、卡组子项与写卡子项自动隐藏。
 - 系列搜索支持系列名、系列缩写和卡号头（如 `w129`、`s130`），输入时即时过滤；排序可按系列名或缩写。
 - 主区域按系列名排序显示全部系列的封面方块（当前数据为 203 个）；标题为系列名，副标题列出该系列内所有不同的系列缩写，用 `/` 分开（如 `AW/GAW`）。
 - 缩略编号取每个 `Prefix` 中 `/` 前的部分；同一文件夹可声明多个 `Prefix`，全部会去重后显示。
