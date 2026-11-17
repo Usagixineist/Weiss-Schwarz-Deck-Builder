@@ -75,7 +75,9 @@ namespace WeissDeckBuilder.UI
 
         private void NavCardEditModifyButton_Click(object sender, EventArgs e)
         {
-            if (!IsCardEditSection)
+            // 添加异画 shares the series picker and the card list, so the
+            // 修改卡片 entry has to take those pages back when it is clicked.
+            if (!IsCardEditSection || _cardEditIntent != CardEditIntent.Modify)
                 ShowCardEdit();
         }
 
