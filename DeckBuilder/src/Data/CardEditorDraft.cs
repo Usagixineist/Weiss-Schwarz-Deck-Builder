@@ -31,6 +31,12 @@ namespace WeissDeckBuilder.Data
         /// <summary>CardData file name of the folder, normally "CardData".</summary>
         public string FileName { get; set; }
 
+        /// <summary>
+        /// Prefix line of the pack (`AW/S18`). 添加异画 needs it to find the
+        /// AlternateArtwork sub folder the game reads for this pack.
+        /// </summary>
+        public string Prefix { get; set; }
+
         public string Id { get; set; }
         public string Name { get; set; }
         public string JapaneseName { get; set; }
@@ -80,6 +86,7 @@ namespace WeissDeckBuilder.Data
             SetName = string.Empty;
             FolderPath = string.Empty;
             FolderFullPath = string.Empty;
+            Prefix = string.Empty;
             FileName = "CardData";
             Id = string.Empty;
             Name = string.Empty;
@@ -175,6 +182,7 @@ namespace WeissDeckBuilder.Data
 
             draft.FolderPath = folder.FolderPath ?? string.Empty;
             draft.FolderFullPath = folder.FullPath ?? string.Empty;
+            draft.Prefix = folder.Prefix ?? string.Empty;
             draft.FileName = string.IsNullOrEmpty(folder.FileName)
                 ? "CardData"
                 : folder.FileName;

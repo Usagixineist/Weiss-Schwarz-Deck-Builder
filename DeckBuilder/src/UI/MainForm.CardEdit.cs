@@ -9,17 +9,43 @@ namespace WeissDeckBuilder.UI
 {
     /// <summary>
     /// 编辑卡片 (写卡): 修改卡片 browses a series exactly like 系列卡表 and
-    /// opens the editor page on a click, 添加卡片 starts a blank card. The
-    /// editor is a normal page of the content host (not a popup) and saving
-    /// goes through <see cref="CardDataWriter"/>, which rewrites the lines the
-    /// editor owns in the card pack's CardData.txt and keeps a .bak next to it.
+    /// opens the editor page on a click, 添加卡片 starts a blank card, and
+    /// 添加异画 opens the same editor for a picked card with its right-hand
+    /// 添加异画 block ready. The editor is a normal page of the content host
+    /// (not a popup) and saving goes through <see cref="CardDataWriter"/>, which
+    /// rewrites the lines the editor owns in the card pack's CardData.txt and
+    /// keeps a .bak next to it; an 异画 is written by
+    /// <see cref="AltArtworkWriter"/> into StreamingAssets\AlternateArtwork.
     /// </summary>
     public sealed partial class MainForm
     {
+        /// <summary>Which sub entry of 写卡 the card list belongs to.</summary>
+        private enum CardEditIntent
+        {
+            /// <summary>修改卡片: a click opens the editor of that card.</summary>
+            Modify,
+
+            /// <summary>添加异画: a click opens the editor on its 添加异画 block.</summary>
+            AltArt
+        }
+
         private RoundedButton _navCardEditButton;
         private RoundedButton _navCardEditModifyButton;
         private RoundedButton _navCardEditAddButton;
+        private RoundedButton _navCardEditAltButton;
         private CardEditorPage _cardEditorPage;
+
+        /// <summary>Sub entry the card list was opened from (see <see cref="CardEditIntent"/>).</summary>
+        private CardEditIntent _cardEditIntent;
+
+        /// <summary>
+        /// Base card the open editor writes an 异画 for: the card itself, or the
+        /// card a clone was copied from. Empty hides the 添加异画 block.
+        /// </summary>
+        private string _cardEditorBaseCardId = string.Empty;
+
+        /// <summary>True once 保存异画 wrote a file, so the grid reloads on exit.</summary>
+        private bool _cardAltArtWritten;
 
         /// <summary>
         /// The card list the 取消 button returns to. 修改卡片 sets it to the
@@ -58,10 +84,25 @@ namespace WeissDeckBuilder.UI
             ShowCardAdd();
         }
 
+        private void NavCardEditAltButton_Click(object sender, EventArgs e)
+        {
+            ShowCardAltArt();
+        }
+
         /// <summary>修改卡片: the series cover grid of 系列卡表.</summary>
         private void ShowCardEdit()
         {
-            ShowCardEditHome();
+            ShowCardEditHome(CardEditIntent.Modify);
+        }
+
+        /// <summary>
+        /// 添加异画: pick a series, then a card; the editor opens with the
+        /// 添加异画 block on the right so the variant number and its art can be
+        /// filled in without leaving the card.
+        /// </summary>
+        private void ShowCardAltArt()
+        {
+            ShowCardEditHome(CardEditIntent.AltArt);
         }
 
         /// <summary>
@@ -73,11 +114,13 @@ namespace WeissDeckBuilder.UI
         /// </summary>
         private void ShowCardAdd()
         {
+            _cardEditIntent = CardEditIntent.Modify;
             ShowCardAddEditor(IsCardEditSection ? _activeSeries : null);
         }
 
-        private void ShowCardEditHome()
+        private void ShowCardEditHome(CardEditIntent intent)
         {
+            _cardEditIntent = intent;
             _viewMode = ViewMode.CardEditList;
             _activeSeries = null;
             _results.Clear();
@@ -91,13 +134,19 @@ namespace WeissDeckBuilder.UI
             SetNavExpanded(true);
             SetNavSubItemsVisible(NavSection.CardEdit);
             ShowContentPage(_browsePage);
-            SetActiveNavItem(_navCardEditModifyButton);
+            SetActiveNavItem(intent == CardEditIntent.AltArt
+                ? _navCardEditAltButton
+                : _navCardEditModifyButton);
             UpdateNewDeckStripVisibility();
 
             _backButton.Text = "←  系列列表";
-            _contentTitle.Text = "修改卡片";
+            _contentTitle.Text = intent == CardEditIntent.AltArt
+                ? "添加异画"
+                : "修改卡片";
             _contentSubtitle.Text = string.Format(
-                "共 {0} 个系列 · 选择系列后编辑卡片",
+                intent == CardEditIntent.AltArt
+                    ? "共 {0} 个系列 · 选择系列后挑一张卡加异画"
+                    : "共 {0} 个系列 · 选择系列后编辑卡片",
                 _database.SeriesNames.Count);
 
             _tileGrid.EmptyText = "没有找到系列";
@@ -118,6 +167,16 @@ namespace WeissDeckBuilder.UI
             CardEditorDraft draft = CardEditorDraft.FromCard(card, folder);
             if (draft == null)
                 return;
+
+            // An 异画 clone has no block of its own: the variant of that card
+            // belongs to the card it was copied from.
+            WeissCard baseCard = card;
+            while (baseCard.CloneOf != null &&
+                !ReferenceEquals(baseCard.CloneOf, baseCard))
+            {
+                baseCard = baseCard.CloneOf;
+            }
+            _cardEditorBaseCardId = baseCard.Id ?? string.Empty;
 
             ShowCardEditorPage(draft, null, _activeSeries);
         }
@@ -193,6 +252,7 @@ namespace WeissDeckBuilder.UI
             _cardEditorPage.Thumbnails = _thumbnails;
             _cardEditorPage.CloseRequested += CardEditorPage_CloseRequested;
             _cardEditorPage.SaveRequested += CardEditorPage_SaveRequested;
+            _cardEditorPage.AltArtSaveRequested += CardEditorPage_AltArtSaveRequested;
             _cardEditorPage.Visible = false;
             _cardEditorPage.TargetChanged += CardEditorPage_TargetChanged;
             _contentHost.Controls.Add(_cardEditorPage);
@@ -207,6 +267,12 @@ namespace WeissDeckBuilder.UI
             EnsureCardEditorPage();
             _viewMode = ViewMode.CardEditor;
             _cardEditorReturnSeries = series;
+            _cardAltArtWritten = false;
+            _cardEditorPage.AltArtBaseCardId = draft.IsNew
+                ? string.Empty
+                : _cardEditorBaseCardId;
+            _cardEditorPage.AlternateArtworkRoot =
+                _database == null ? string.Empty : _database.AlternateArtworkRoot;
 
             // The editor needs the width: the filter column (250px) belongs to
             // the card list and folds away while the page is open.
@@ -215,14 +281,20 @@ namespace WeissDeckBuilder.UI
             _filterHost.Visible = false;
             SetNavExpanded(false);
             SetNavSubItemsVisible(NavSection.CardEdit);
+            bool altArt = !draft.IsNew &&
+                _cardEditIntent == CardEditIntent.AltArt;
             SetActiveNavItem(draft.IsNew
                 ? _navCardEditAddButton
-                : _navCardEditModifyButton);
+                : altArt ? _navCardEditAltButton : _navCardEditModifyButton);
 
-            _contentTitle.Text = draft.IsNew ? "添加卡片" : "修改卡片";
+            _contentTitle.Text = draft.IsNew
+                ? "添加卡片"
+                : altArt ? "添加异画" : "修改卡片";
             _contentSubtitle.Text = draft.TargetLabel;
             ShowContentPage(_cardEditorPage);
             _cardEditorPage.LoadDraft(draft, folders);
+            if (altArt)
+                _cardEditorPage.FocusAltArtSection();
             ScheduleDarkChrome();
         }
 
@@ -251,12 +323,28 @@ namespace WeissDeckBuilder.UI
         private void CancelCardEditor()
         {
             bool hasSeries = _cardEditorReturnSeries != null && _activeSeries != null;
+            string seriesName = hasSeries ? _cardEditorReturnSeries.Name : string.Empty;
+            // 保存异画 only wrote a file: the card list has to be rebuilt from
+            // the reloaded card table so the new variant shows up right away.
+            bool refresh = _cardAltArtWritten;
             CloseCardEditor();
 
             if (!hasSeries)
             {
-                ShowCardEditHome();
+                ShowCardEditHome(_cardEditIntent);
                 return;
+            }
+
+            if (refresh)
+            {
+                SeriesDefinition reloaded = _database.GetSeries(seriesName);
+                if (reloaded != null)
+                {
+                    // OpenSeries keeps the 写卡 page it was started from.
+                    _viewMode = ViewMode.CardEditList;
+                    OpenSeries(reloaded);
+                    return;
+                }
             }
 
             _viewMode = ViewMode.CardEditCards;
@@ -269,7 +357,9 @@ namespace WeissDeckBuilder.UI
             SetNavSubItemsVisible(NavSection.None);
             SetActiveNavItem(_navCardEditButton);
             _backButton.Text = "←  选择系列";
-            _contentTitle.Text = "修改卡片";
+            _contentTitle.Text = _cardEditIntent == CardEditIntent.AltArt
+                ? "添加异画"
+                : "修改卡片";
             ShowContentPage(_browsePage);
             if (_tileGrid != null && _tileGrid.CanFocus)
                 _tileGrid.Focus();
@@ -283,6 +373,14 @@ namespace WeissDeckBuilder.UI
             {
                 _cardEditorPage.UnloadDraft();
                 _cardEditorPage.Visible = false;
+            }
+
+            if (_cardAltArtWritten)
+            {
+                // The variant exists on disk only; dropping the cached series
+                // makes the next card list read it back.
+                _cardAltArtWritten = false;
+                _database.Reload();
             }
         }
 
@@ -322,6 +420,45 @@ namespace WeissDeckBuilder.UI
             _cardEditorPage.InvalidateReference();
             CloseCardEditor();
             ReloadAfterCardSave(seriesName, result);
+        }
+
+        /// <summary>
+        /// 保存异画: writes the picked image into StreamingAssets\AlternateArtwork
+        /// through <see cref="AltArtworkWriter"/> and keeps the editor open, so
+        /// several variants of one card can be added in a row. The card list is
+        /// reloaded when the editor closes.
+        /// </summary>
+        private void CardEditorPage_AltArtSaveRequested(object sender, EventArgs e)
+        {
+            if (_cardEditorPage == null)
+                return;
+
+            AltArtworkRequest request = _cardEditorPage.ReadAltArt();
+            if (request == null)
+                return;
+
+            Cursor previousCursor = Cursor;
+            Cursor = Cursors.WaitCursor;
+            AltArtworkResult result;
+            try
+            {
+                result = AltArtworkWriter.Save(request);
+            }
+            finally
+            {
+                Cursor = previousCursor;
+            }
+
+            if (!result.Success)
+            {
+                _cardEditorPage.SetStatus(result.Message, true);
+                _cardEditorPage.SetAltArtStatus(result.Message, true);
+                return;
+            }
+
+            _cardAltArtWritten = true;
+            _contentSubtitle.Text = _cardEditorPage.Subtitle;
+            _cardEditorPage.NotifyAltArtSaved(result.Message);
         }
 
         private void ReloadAfterCardSave(string seriesName, CardWriteResult result)

@@ -360,14 +360,17 @@ namespace WeissDeckBuilder.UI
 
             // 编辑卡片 is the card authoring section: 修改卡片 browses a series
             // like 系列卡表 and opens the editor on a click, 添加卡片 starts a
-            // blank card right away. Both sub entries only unfold while the
-            // section is open, exactly like the deck tools above.
+            // blank card right away, 添加异画 opens the same editor with the
+            // 添加异画 block of the clicked card ready. All sub entries only
+            // unfold while the section is open, exactly like the deck tools.
             _navCardEditButton = AddNavItem("编辑卡片", "写卡", "编辑卡片",
                 NavCardEditButton_Click);
             _navCardEditModifyButton = AddNavItem("修改卡片", "修改", "修改卡片",
                 NavCardEditModifyButton_Click, true, NavSection.CardEdit);
             _navCardEditAddButton = AddNavItem("添加卡片", "添加", "添加卡片",
                 NavCardEditAddButton_Click, true, NavSection.CardEdit);
+            _navCardEditAltButton = AddNavItem("添加异画", "异画", "添加异画",
+                NavCardEditAltButton_Click, true, NavSection.CardEdit);
 
             // Both pinned entries live at the bottom of the sidebar: 启动游戏
             // starts the game with the noUpdate argument (the same thing
@@ -1471,7 +1474,9 @@ namespace WeissDeckBuilder.UI
                 _contentTitle.Text = deckPicker
                     ? "编辑卡组"
                     : cardEdit
-                        ? "修改卡片"
+                        ? (_cardEditIntent == CardEditIntent.AltArt
+                            ? "添加异画"
+                            : "修改卡片")
                         : series.Name;
                 _contentSubtitle.Text = folderName + " · 正在加载...";
 

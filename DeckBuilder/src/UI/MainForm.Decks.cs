@@ -111,7 +111,8 @@ namespace WeissDeckBuilder.UI
             SetNavGroupEmphasis(_navDeckButton, selected,
                 _navDeckNewButton, _navDeckEditButton);
             SetNavGroupEmphasis(_navCardEditButton, selected,
-                _navCardEditModifyButton, _navCardEditAddButton);
+                _navCardEditModifyButton, _navCardEditAddButton,
+                _navCardEditAltButton);
         }
 
         /// <summary>
@@ -121,14 +122,21 @@ namespace WeissDeckBuilder.UI
         /// entry ever looks active.
         /// </summary>
         private static void SetNavGroupEmphasis(RoundedButton group,
-            RoundedButton selected, RoundedButton first, RoundedButton second)
+            RoundedButton selected, params RoundedButton[] children)
         {
             if (group == null)
                 return;
 
-            bool active = ReferenceEquals(selected, group) ||
-                ReferenceEquals(selected, first) ||
-                ReferenceEquals(selected, second);
+            bool active = ReferenceEquals(selected, group);
+            for (int i = 0; i < children.Length; i++)
+            {
+                if (ReferenceEquals(selected, children[i]))
+                {
+                    active = true;
+                    break;
+                }
+            }
+
             bool box = ReferenceEquals(selected, group);
             Color color = active ? Color.White : AppTheme.TextSoft;
             if (group.Selected == box && group.ForeColor == color)

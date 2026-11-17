@@ -30,6 +30,12 @@ namespace WeissDeckBuilder.UI
         private const int SearchRowHeight = 48;
         private const int SearchResultLimit = 120;
 
+        /// <summary>Height of the 添加异画 block above the reference panel.</summary>
+        private const int AltArtSectionHeight = 146;
+
+        /// <summary>Width of the 异画 art box inside that block.</summary>
+        private const int AltArtImageWidth = 78;
+
         private static readonly Color PanelSurface = Color.FromArgb(23, 33, 48);
         private static readonly Color ChipSurface = Color.FromArgb(39, 51, 69);
 
@@ -110,8 +116,43 @@ namespace WeissDeckBuilder.UI
         /// <summary>True while the fields are filled, so typing does not resolve.</summary>
         private bool _loadingDraft;
 
+        /// <summary>添加异画 section of the right column; hidden for a new card.</summary>
+        private Control _altArtSection;
+        private FieldBox _altIdBox;
+        private CardImageDropBox _altImageBox;
+        private RoundedButton _altSaveButton;
+        private Label _altStatusLabel;
+        private string _altImagePath;
+        private Image _altPreview;
+
+        /// <summary>
+        /// Whether 添加异画 applies to the open card. Kept next to
+        /// <see cref="Control.Visible"/> because a page that was never shown
+        /// reports every child as invisible.
+        /// </summary>
+        private bool _altArtVisible;
+
         public event EventHandler CloseRequested;
         public event EventHandler SaveRequested;
+
+        /// <summary>
+        /// Raised when 保存异画 is clicked: the page hands the request to
+        /// MainForm, which writes it through <see cref="AltArtworkWriter"/>.
+        /// </summary>
+        public event EventHandler AltArtSaveRequested;
+
+        /// <summary>
+        /// Card number of the base card 添加异画 writes for (`AW/S18-E101`).
+        /// Empty hides the section, which is the case for 添加卡片: a card that
+        /// is not in CardData yet has no variant to attach to.
+        /// </summary>
+        public string AltArtBaseCardId { get; set; }
+
+        /// <summary>
+        /// StreamingAssets\AlternateArtwork, assigned by MainForm. The page only
+        /// uses it to preview the target path of a new variant.
+        /// </summary>
+        public string AlternateArtworkRoot { get; set; }
 
         /// <summary>
         /// Raised when the card number picked a different card pack, so
@@ -184,6 +225,8 @@ namespace WeissDeckBuilder.UI
             _statusFont = CreateFont(9F, FontStyle.Regular);
             _folderImages = new Dictionary<string, Dictionary<string, string>>(
                 StringComparer.OrdinalIgnoreCase);
+            AltArtBaseCardId = string.Empty;
+            AlternateArtworkRoot = string.Empty;
 
             _searchTimer = new System.Windows.Forms.Timer();
             _searchTimer.Interval = 260;
@@ -219,6 +262,7 @@ namespace WeissDeckBuilder.UI
                 _buttonFont.Dispose();
                 _statusFont.Dispose();
                 DisposePreview();
+                DisposeAltArtPreview();
             }
             base.Dispose(disposing);
         }
@@ -267,6 +311,8 @@ namespace WeissDeckBuilder.UI
             _folders = null;
             DisposePreview();
             _imageBox.SetImage(null, "拖入卡图，或点击选择文件");
+            SetAltArtVisible(false);
+            ApplyAltArtImage(null);
         }
 
         public void SetStatus(string text, bool error)
@@ -700,12 +746,19 @@ namespace WeissDeckBuilder.UI
             var column = new TableLayoutPanel();
             column.Dock = DockStyle.Fill;
             column.ColumnCount = 1;
-            column.RowCount = 1;
+            column.RowCount = 2;
             column.BackColor = Color.Transparent;
             column.Margin = new Padding(0);
             column.Padding = new Padding(0);
             column.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            // Row 0 is 添加异画, folded to zero while it does not apply; the
+            // reference panel below always keeps the rest of the column.
+            column.RowStyles.Add(new RowStyle(SizeType.Absolute, 0F));
             column.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            _altArtSection = BuildAltArtSection();
+            _altArtSection.Visible = false;
+            column.Controls.Add(_altArtSection, 0, 0);
 
             _referenceBody = new Panel();
             _referenceBody.Dock = DockStyle.Fill;
@@ -719,8 +772,112 @@ namespace WeissDeckBuilder.UI
             _referenceDetailPanel.Visible = false;
             _referenceBody.Controls.Add(_referenceDetailPanel);
 
-            column.Controls.Add(_referenceBody, 0, 0);
+            column.Controls.Add(_referenceBody, 0, 1);
             return column;
+        }
+
+        /// <summary>
+        /// 添加异画: the card number of the variant plus the art that carries it.
+        /// A variant lives only as an image below
+        /// StreamingAssets\AlternateArtwork, so this block writes a file and
+        /// never touches CardData.txt.
+        /// </summary>
+        private Control BuildAltArtSection()
+        {
+            var host = new TableLayoutPanel();
+            host.Dock = DockStyle.Fill;
+            host.ColumnCount = 1;
+            host.RowCount = 3;
+            host.BackColor = PanelSurface;
+            host.Margin = new Padding(0, 0, 0, 8);
+            host.Padding = new Padding(10, 6, 10, 6);
+            host.RowStyles.Add(new RowStyle(SizeType.Absolute, CaptionHeight));
+            host.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            host.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
+            host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+
+            var caption = new Label();
+            caption.Text = "添加异画";
+            caption.Dock = DockStyle.Fill;
+            caption.AutoEllipsis = true;
+            caption.Font = _captionFont;
+            caption.ForeColor = AppTheme.TextSoft;
+            caption.BackColor = Color.Transparent;
+            caption.TextAlign = ContentAlignment.MiddleLeft;
+            caption.Margin = new Padding(2, 0, 0, 0);
+            host.Controls.Add(caption, 0, 0);
+
+            var body = new TableLayoutPanel();
+            body.Dock = DockStyle.Fill;
+            body.ColumnCount = 2;
+            body.RowCount = 1;
+            body.BackColor = Color.Transparent;
+            body.Margin = new Padding(0);
+            body.Padding = new Padding(0);
+            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            body.ColumnStyles.Add(new ColumnStyle(
+                SizeType.Absolute, AltArtImageWidth));
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            var numberCell = new TableLayoutPanel();
+            numberCell.Dock = DockStyle.Fill;
+            numberCell.ColumnCount = 1;
+            numberCell.RowCount = 3;
+            numberCell.BackColor = Color.Transparent;
+            numberCell.Margin = new Padding(0, 0, 8, 0);
+            numberCell.Padding = new Padding(0);
+            numberCell.RowStyles.Add(new RowStyle(SizeType.Absolute, CaptionHeight));
+            numberCell.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
+            numberCell.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            numberCell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+
+            numberCell.Controls.Add(CreateCaption(
+                "异画卡号（基卡号 + 一个字母）"), 0, 0);
+
+            _altIdBox = CreateField(false);
+            _altIdBox.Dock = DockStyle.Fill;
+            _altIdBox.Input.TextChanged += delegate { UpdateAltArtHint(); };
+            numberCell.Controls.Add(_altIdBox, 0, 1);
+
+            _altStatusLabel = new Label();
+            _altStatusLabel.Text = string.Empty;
+            _altStatusLabel.Dock = DockStyle.Fill;
+            _altStatusLabel.AutoEllipsis = true;
+            _altStatusLabel.Font = _captionFont;
+            _altStatusLabel.ForeColor = AppTheme.TextMuted;
+            _altStatusLabel.BackColor = Color.Transparent;
+            _altStatusLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _altStatusLabel.Margin = new Padding(2, 0, 0, 0);
+            numberCell.Controls.Add(_altStatusLabel, 0, 2);
+
+            body.Controls.Add(numberCell, 0, 0);
+
+            _altImageBox = new CardImageDropBox();
+            _altImageBox.Dock = DockStyle.Fill;
+            _altImageBox.HintFont = _captionFont;
+            _altImageBox.SurfaceColor = PanelSurface;
+            _altImageBox.BrowseRequested += delegate { BrowseForAltArtImage(); };
+            _altImageBox.FileDropped += AltImageBox_FileDropped;
+            body.Controls.Add(_altImageBox, 1, 0);
+
+            host.Controls.Add(body, 0, 1);
+
+            var actions = new FlowLayoutPanel();
+            actions.Dock = DockStyle.Fill;
+            actions.FlowDirection = FlowDirection.LeftToRight;
+            actions.WrapContents = false;
+            actions.BackColor = Color.Transparent;
+            actions.Margin = new Padding(0);
+            actions.Padding = new Padding(0, 2, 0, 0);
+
+            _altSaveButton = CreateActionButton("保存异画", ChipSurface,
+                AppTheme.TextSoft, 96);
+            _altSaveButton.Margin = new Padding(0);
+            _altSaveButton.Click += delegate { RaiseAltArtSaveRequested(); };
+            actions.Controls.Add(_altSaveButton);
+            host.Controls.Add(actions, 0, 2);
+
+            return host;
         }
 
         private Panel BuildReferenceSearchPanel()
@@ -913,6 +1070,7 @@ namespace WeissDeckBuilder.UI
             UpdatePackTarget();
             ShowPreview(draft.PreviewImagePath);
             _subtitleLabel.Text = BuildSubtitle();
+            RefreshAltArtSection();
         }
 
         /// <summary>
@@ -1198,6 +1356,264 @@ namespace WeissDeckBuilder.UI
             _draft.PreviewImagePath = path;
             ShowPreview(path);
             SetStatus("保存时会把卡图复制到卡包目录：" + Path.GetFileName(path), false);
+        }
+
+        /// <summary>
+        /// Shows or folds the 添加异画 block. It only makes sense for a card
+        /// that already has a CardData block and a pack with a Prefix line,
+        /// because the game finds a variant through its image alone.
+        /// </summary>
+        private void RefreshAltArtSection()
+        {
+            bool visible = _draft != null && !_draft.IsNew &&
+                !string.IsNullOrEmpty(AltArtBaseCardId) &&
+                !string.IsNullOrEmpty(_draft.Prefix);
+            SetAltArtVisible(visible);
+            if (!visible)
+                return;
+
+            _altIdBox.Text = SuggestAltArtId();
+            ApplyAltArtImage(null);
+        }
+
+        private void SetAltArtVisible(bool visible)
+        {
+            _altArtVisible = visible;
+            if (_altArtSection == null)
+                return;
+
+            _altArtSection.Visible = visible;
+            var column = _altArtSection.Parent as TableLayoutPanel;
+            if (column != null && column.RowStyles.Count > 0)
+                column.RowStyles[0].Height = visible ? AltArtSectionHeight : 0F;
+        }
+
+        /// <summary>Variant number the pack does not use yet, base card included.</summary>
+        private string SuggestAltArtId()
+        {
+            if (_draft == null)
+                return string.Empty;
+
+            return AltArtworkWriter.SuggestAltId(AltArtBaseCardId,
+                _draft.Prefix, _draft.FolderPath, AlternateArtworkRoot);
+        }
+
+        /// <summary>
+        /// Mirrors the save rules while the player types: the line under the
+        /// 异画卡号 field names the file that will be written, or says why the
+        /// number cannot work.
+        /// </summary>
+        private void UpdateAltArtHint()
+        {
+            if (_altStatusLabel == null || _draft == null)
+                return;
+
+            string problem;
+            string hint = DescribeAltArtTarget(out problem);
+            _altStatusLabel.Text = hint;
+            _altStatusLabel.ForeColor = problem == null
+                ? AppTheme.TextMuted
+                : AppTheme.Danger;
+        }
+
+        private string DescribeAltArtTarget(out string problem)
+        {
+            problem = null;
+            string baseId = (AltArtBaseCardId ?? string.Empty).Trim();
+            string altId = _altIdBox == null ? string.Empty : _altIdBox.Text.Trim();
+
+            if (string.IsNullOrEmpty(_draft.Prefix))
+            {
+                problem = "prefix";
+                return "这个卡包没有 Prefix，游戏读不到它的异画";
+            }
+
+            if (altId.Length == 0)
+            {
+                problem = "empty";
+                return "例如 " + baseId + "a（基卡号 + 一个字母）";
+            }
+
+            if (!altId.StartsWith(baseId, StringComparison.OrdinalIgnoreCase))
+            {
+                problem = "base";
+                return "异画卡号要在 " + baseId + " 后面加一个字母";
+            }
+
+            string tail = altId.Substring(baseId.Length);
+            if (tail.Length != 1)
+            {
+                problem = "tail";
+                return tail.Length == 0
+                    ? "异画卡号要带上异画字母：" + baseId + "a"
+                    : "只能比基卡号多一个字母，例如 " + baseId + "a";
+            }
+
+            if (!char.IsLetter(tail[0]))
+            {
+                problem = "digit";
+                return "最后一位必须是字母，数字会被当成卡号的一部分";
+            }
+
+            if (!AltArtworkNaming.IsUsableSuffix(tail[0]))
+            {
+                problem = "E";
+                return "不能以大写 E 结尾：E 是卡表的异画标记";
+            }
+
+            var folder = new SeriesFolder();
+            folder.Prefix = _draft.Prefix;
+            folder.FolderPath = _draft.FolderPath;
+            string directory = AltArtworkNaming.ResolveDirectory(
+                AlternateArtworkRoot, folder);
+            string fileBase = AltArtworkNaming.GetFileBaseName(altId, tail[0]);
+            string target = string.IsNullOrEmpty(directory)
+                ? fileBase + ".png"
+                : AltArtworkNaming.DisplayPath(AlternateArtworkRoot,
+                    Path.Combine(directory, fileBase + ".png"));
+            return "写入 " + target + "（png / jpg）· 游戏里显示 " + altId;
+        }
+
+        private void RaiseAltArtSaveRequested()
+        {
+            EventHandler handler = AltArtSaveRequested;
+            if (handler != null)
+                handler(this, EventArgs.Empty);
+        }
+
+        private void BrowseForAltArtImage()
+        {
+            using (var dialog = new OpenFileDialog())
+            {
+                dialog.Title = "选择异画卡图";
+                // The game only reads .png / .jpg out of AlternateArtwork, so
+                // the picker offers nothing else.
+                dialog.Filter = "异画卡图 (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg";
+                dialog.CheckFileExists = true;
+                if (dialog.ShowDialog(FindForm()) != DialogResult.OK)
+                    return;
+
+                ApplyAltArtImage(dialog.FileName);
+            }
+        }
+
+        private void AltImageBox_FileDropped(object sender,
+            CardImageDroppedEventArgs e)
+        {
+            if (e == null || string.IsNullOrEmpty(e.Path))
+                return;
+
+            ApplyAltArtImage(e.Path);
+        }
+
+        private void ApplyAltArtImage(string path)
+        {
+            _altImagePath = path;
+            DisposeAltArtPreview();
+
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                try
+                {
+                    using (Image source = Image.FromFile(path))
+                        _altPreview = new Bitmap(source);
+                }
+                catch (Exception)
+                {
+                    _altPreview = null;
+                }
+            }
+
+            if (_altImageBox != null)
+            {
+                _altImageBox.SetImage(_altPreview, _altPreview == null
+                    ? "拖入异画卡图"
+                    : "拖入可替换");
+            }
+
+            UpdateAltArtHint();
+        }
+
+        private void DisposeAltArtPreview()
+        {
+            if (_altPreview == null)
+                return;
+
+            _altPreview.Dispose();
+            _altPreview = null;
+        }
+
+        /// <summary>Status line of the 添加异画 block.</summary>
+        public void SetAltArtStatus(string text, bool error)
+        {
+            if (_altStatusLabel == null)
+                return;
+
+            _altStatusLabel.Text = text ?? string.Empty;
+            _altStatusLabel.ForeColor = error
+                ? AppTheme.Danger
+                : AppTheme.TextMuted;
+        }
+
+        /// <summary>
+        /// After a successful save: the picked art is used up and the next free
+        /// letter is offered, so a second variant needs no retyping.
+        /// </summary>
+        public void NotifyAltArtSaved(string message)
+        {
+            SetStatus(message, false);
+            ApplyAltArtImage(null);
+            if (_altIdBox != null)
+                _altIdBox.Text = SuggestAltArtId();
+            UpdateAltArtHint();
+        }
+
+        /// <summary>
+        /// Collects 添加异画 into a request. Returns null and explains in the
+        /// footer when the number or the art is missing.
+        /// </summary>
+        public AltArtworkRequest ReadAltArt()
+        {
+            if (_draft == null || _draft.IsNew ||
+                string.IsNullOrEmpty(AltArtBaseCardId) || !_altArtVisible)
+            {
+                SetStatus("先打开一张已有的卡，才能给它添加异画", true);
+                return null;
+            }
+
+            string altId = _altIdBox.Text.Trim();
+            if (altId.Length == 0)
+            {
+                SetStatus("异画卡号不能为空，例如 " + AltArtBaseCardId + "a", true);
+                _altIdBox.Input.Focus();
+                return null;
+            }
+
+            if (string.IsNullOrEmpty(_altImagePath) || !File.Exists(_altImagePath))
+            {
+                SetStatus("先把异画卡图拖进 添加异画 的图片框", true);
+                _altImageBox.Focus();
+                return null;
+            }
+
+            var request = new AltArtworkRequest();
+            request.BaseCardId = AltArtBaseCardId;
+            request.Prefix = _draft.Prefix;
+            request.FolderPath = _draft.FolderPath;
+            request.AlternateArtworkRoot = AlternateArtworkRoot;
+            request.AltId = altId;
+            request.ImageSourcePath = _altImagePath;
+            return request;
+        }
+
+        /// <summary>Puts the cursor in the 异画卡号 field of 添加异画.</summary>
+        public void FocusAltArtSection()
+        {
+            if (!_altArtVisible || _altIdBox == null)
+                return;
+
+            _altIdBox.Input.Focus();
+            _altIdBox.Input.SelectAll();
         }
 
         /// <summary>

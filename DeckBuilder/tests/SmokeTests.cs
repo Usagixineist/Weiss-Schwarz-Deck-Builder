@@ -78,6 +78,8 @@ internal static class SmokeTests
                 db => { TestCardEditor(); TestCardEditorPage(); }),
             new TestGroup("packindex", "添加卡片：卡号定位卡包", false,
                 db => TestCardPackIndex()),
+            new TestGroup("altart", "添加异画：命名规则、写入与识别", false,
+                db => { TestAltArtNaming(); TestAltArtWriter(); TestAltArtPage(); }),
             new TestGroup("launcher", "启动游戏：定位游戏目录与不热更参数", true,
                 db => TestGameLauncher(db))
         };
@@ -3537,11 +3539,206 @@ internal static class SmokeTests
     }
 
     /// <summary>
-    /// 启动游戏 entry: the exe is found by walking up from the card data folder
-    /// and started with the same `noUpdate` argument as 不热更启动游戏.lnk, so the
-    /// bundled updater never rewrites the card table this app edits. Nothing
-    /// here starts a process, so the group is safe to run unattended.
+    /// 添加异画 and ExtraArtworkLoader share <see cref="AltArtworkNaming"/>.
+    /// These checks pin the rules (directory, file name, clone id) so a variant
+    /// written today stays detectable tomorrow.
     /// </summary>
+    private static void TestAltArtNaming()
+    {
+        Check("altart set code is the last prefix segment",
+            AltArtworkNaming.GetSetCode("AW/S18") == "S18" &&
+            AltArtworkNaming.GetSetCode("OS05/R05") == "R05" &&
+            AltArtworkNaming.GetSetCode("PR") == "PR",
+            AltArtworkNaming.GetSetCode("OS05/R05"));
+
+        Check("altart file name joins number and variant letter",
+            AltArtworkNaming.GetFileBaseName("AW/S18-E101", 'a') == "AW_S18_E101a" &&
+            AltArtworkNaming.GetFileBasePrefix("AW/S18-E101") == "AW_S18_E101",
+            AltArtworkNaming.GetFileBaseName("AW/S18-E101", 'a'));
+
+        AltArtworkFileName parsed = AltArtworkNaming.Parse("AW_S18_E101a", "AW/S18");
+        Check("altart parse reads the base card number",
+            parsed != null && parsed.NormalCardId == "AW/S18-101" &&
+            parsed.ParallelCardId == "AW/S18-E101" && parsed.Suffix == 'a',
+            parsed == null
+                ? "null"
+                : parsed.NormalCardId + " / " + parsed.ParallelCardId);
+        Check("altart parse keeps the clone id",
+            parsed != null &&
+            parsed.BuildVariantId("AW/S18-E101") == "AW/S18-E101a" &&
+            parsed.MatchesBase("AW/S18-E101") &&
+            !parsed.MatchesBase("AW/S18-102"),
+            parsed == null ? "null" : parsed.BuildVariantId("AW/S18-E101"));
+
+        AltArtworkFileName plain = AltArtworkNaming.Parse("os05_r05_001s", "OS05/R05");
+        Check("altart parse folds the prefix and case",
+            plain != null && plain.NormalCardId == "OS05/R05-001" &&
+            plain.BuildVariantId("OS05/R05-001") == "OS05/R05-001s",
+            plain == null ? "null" : plain.NormalCardId);
+
+        AltArtworkFileName trial = AltArtworkNaming.Parse("KS_W49_TE16b", "KS/W49");
+        Check("altart parse handles trial cards",
+            trial != null && trial.NormalCardId == "KS/W49-T16" &&
+            trial.ParallelCardId == "KS/W49-TE16" &&
+            trial.BuildVariantId("KS/W49-T16") == "KS/W49-T16b",
+            trial == null ? "null" : trial.NormalCardId + " / " + trial.ParallelCardId);
+
+        Check("altart parse ignores a name without variant letter",
+            AltArtworkNaming.Parse("AW_S18_E101", "AW/S18") == null &&
+            AltArtworkNaming.Parse("AW_S18_E1011", "AW/S18") == null);
+        Check("altart keeps letters as suffix only",
+            AltArtworkNaming.IsUsableSuffix('a') &&
+            AltArtworkNaming.IsUsableSuffix('s') &&
+            !AltArtworkNaming.IsUsableSuffix('E') &&
+            !AltArtworkNaming.IsUsableSuffix('1'));
+
+        // A pack whose art lives in a directory named after the folder instead
+        // of the set code (two shipped packs do) still resolves.
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-altart-dir-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "OS05-R05"));
+            SeriesFolder folder = CreatePackFolder("Aokana/OS05-R05", "OS05/R05",
+                "R05", "Aokana");
+            Check("altart directory falls back to the folder name",
+                string.Equals(Path.GetFileName(
+                        AltArtworkNaming.ResolveDirectory(root, folder)),
+                    "OS05-R05", StringComparison.OrdinalIgnoreCase),
+                AltArtworkNaming.ResolveDirectory(root, folder));
+
+            Directory.CreateDirectory(Path.Combine(root, "R05"));
+            Check("altart directory prefers the set code",
+                string.Equals(Path.GetFileName(
+                        AltArtworkNaming.ResolveDirectory(root, folder)),
+                    "R05", StringComparison.OrdinalIgnoreCase),
+                AltArtworkNaming.ResolveDirectory(root, folder));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// 添加异画 writes a copy below AlternateArtwork and nothing else. These
+    /// checks drive the writer and then let ExtraArtworkLoader read the file
+    /// back, which is the only proof a variant is really detected.
+    /// </summary>
+    private static void TestAltArtWriter()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-altart-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string cardsRoot = Path.Combine(root, "Cards", "测试系列", "S01");
+            string altRoot = Path.Combine(root, "AlternateArtwork");
+            Directory.CreateDirectory(cardsRoot);
+            Directory.CreateDirectory(altRoot);
+
+            string cardData = Path.Combine(cardsRoot, "CardData.txt");
+            File.WriteAllText(cardData,
+                CardDataWriter.BuildBlock(CreateTestDraft("TST/01-001")),
+                new UTF8Encoding(false));
+
+            string image = Path.Combine(root, "art.png");
+            File.WriteAllBytes(image, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+
+            var request = new AltArtworkRequest();
+            request.BaseCardId = "TST/01-001";
+            request.Prefix = "TST/01";
+            request.FolderPath = "测试系列/S01";
+            request.AlternateArtworkRoot = altRoot;
+            request.AltId = "TST/01-001a";
+            request.ImageSourcePath = image;
+
+            AltArtworkResult saved = AltArtworkWriter.Save(request);
+            string expected = Path.Combine(altRoot, "01", "TST_01_001a.png");
+            Check("altart writer copies the image into AlternateArtwork",
+                saved.Success && File.Exists(expected) &&
+                string.Equals(saved.FilePath, expected,
+                    StringComparison.OrdinalIgnoreCase),
+                saved.Message);
+
+            // The loader has to build a clone from exactly that file.
+            SeriesFolder folder = CreatePackFolder("测试系列/S01", "TST/01",
+                "S01", "测试系列");
+            folder.FullPath = cardsRoot;
+            var warnings = new List<string>();
+            folder.Cards.AddRange(CardDataParser.ParseFile(cardData, folder,
+                CommonEffectLibrary.Empty, warnings));
+            ExtraArtworkLoader.Load(folder, altRoot, warnings);
+
+            WeissCard clone = null;
+            for (int i = 0; i < folder.Cards.Count; i++)
+            {
+                if (folder.Cards[i].IsClone)
+                {
+                    clone = folder.Cards[i];
+                    break;
+                }
+            }
+            Check("altart loader finds the written variant",
+                clone != null && clone.Id == "TST/01-001a" &&
+                clone.CloneOf != null && clone.CloneOf.Id == "TST/01-001",
+                clone == null ? "none" : clone.Id);
+            Check("altart variant keeps the base card fields",
+                clone != null && clone.Name == "测试卡" && clone.Power == 5000,
+                clone == null ? "null" : clone.Name);
+
+            var index = ImageLocator.BuildIndex(cardsRoot);
+            if (clone != null)
+                ImageLocator.Resolve(clone, index);
+            Check("altart variant shows its own art",
+                clone != null && !string.IsNullOrEmpty(clone.ImagePath) &&
+                string.Equals(clone.ImagePath, expected,
+                    StringComparison.OrdinalIgnoreCase),
+                clone == null ? "null" : (clone.ImagePath ?? "null"));
+
+            // Everything the loader would ignore has to be refused up front.
+            Check("altart writer refuses a taken number",
+                !AltArtworkWriter.Save(request).Success);
+
+            string suggested = AltArtworkWriter.SuggestAltId("TST/01-001",
+                "TST/01", "测试系列/S01", altRoot);
+            Check("altart writer suggests the next free letter",
+                suggested == "TST/01-001b", suggested);
+
+            request.AltId = "TST/01-002a";
+            Check("altart writer refuses another card number",
+                !AltArtworkWriter.Save(request).Success);
+            request.AltId = "TST/01-0011";
+            Check("altart writer refuses a digit suffix",
+                !AltArtworkWriter.Save(request).Success);
+            request.AltId = "TST/01-001E";
+            Check("altart writer refuses the E suffix",
+                !AltArtworkWriter.Save(request).Success);
+            request.AltId = "TST/01-001ab";
+            Check("altart writer refuses two letters",
+                !AltArtworkWriter.Save(request).Success);
+
+            string webp = Path.Combine(root, "art.webp");
+            File.WriteAllBytes(webp, new byte[] { 1, 2, 3 });
+            request.AltId = "TST/01-001b";
+            request.ImageSourcePath = webp;
+            AltArtworkResult refused = AltArtworkWriter.Save(request);
+            Check("altart writer refuses a format the game does not read",
+                !refused.Success && refused.Message.Contains("png"),
+                refused.Message);
+
+            request.Prefix = string.Empty;
+            request.ImageSourcePath = image;
+            Check("altart writer refuses a pack without prefix",
+                !AltArtworkWriter.Save(request).Success);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
     /// <summary>
     /// 添加卡片 picks the card pack from the 卡号 alone: the head of the number
     /// is the `Prefix` line of SingleSetData.txt. Synthetic metadata keeps the
@@ -3690,6 +3887,120 @@ internal static class SmokeTests
         return string.Join(" | ", parts.ToArray());
     }
 
+    /// <summary>
+    /// 添加异画 in the editor page: the right column grows the block for an
+    /// existing card, suggests the next free letter and refuses to save before
+    /// an image was picked.
+    /// </summary>
+    private static void TestAltArtPage()
+    {
+        Exception error = null;
+        var worker = new Thread(delegate()
+        {
+            try
+            {
+                TestAltArtPageCore();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        });
+        worker.SetApartmentState(ApartmentState.STA);
+        worker.IsBackground = true;
+        worker.Start();
+        worker.Join();
+        if (error != null)
+            Fail("altart editor page runs without a screen", error.ToString());
+    }
+
+    private static void TestAltArtPageCore()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-altart-page-" + Guid.NewGuid().ToString("N"));
+        string altRoot = Path.Combine(root, "AlternateArtwork");
+        string image = Path.Combine(root, "alt.png");
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(altRoot, "01"));
+            Directory.CreateDirectory(Path.Combine(root, "S01"));
+            File.WriteAllBytes(image, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+
+            var series = new SeriesDefinition("测试系列");
+            SeriesFolder folder = CreatePackFolder("测试系列/S01", "TST/01",
+                "S01", "测试系列");
+            folder.FullPath = Path.Combine(root, "S01");
+            series.Folders.Add(folder);
+
+            var draft = new CardEditorDraft();
+            draft.IsNew = false;
+            draft.Id = "TST/01-001";
+            draft.OriginalId = "TST/01-001";
+            draft.Name = "测试卡";
+            draft.Prefix = "TST/01";
+            draft.FolderPath = folder.FolderPath;
+            draft.FolderFullPath = folder.FullPath;
+
+            using (var page = new CardEditorPage())
+            {
+                // A page that was never shown reports every child as invisible.
+                page.Visible = true;
+                page.AlternateArtworkRoot = altRoot;
+                page.AltArtBaseCardId = "TST/01-001";
+                page.LoadDraft(draft, series.Folders);
+
+                Control section = FindEditorControl(page, "_altArtSection");
+                Check("altart page shows the block for an existing card",
+                    section != null && section.Visible);
+
+                FieldBox altId = FindEditorField(page, "_altIdBox");
+                Check("altart page suggests the first free letter",
+                    altId != null && altId.Input.Text == "TST/01-001a",
+                    altId == null ? "null" : altId.Input.Text);
+
+                Check("altart page wants the art first",
+                    page.ReadAltArt() == null && StatusText(page).Contains("异画卡图"),
+                    StatusText(page));
+
+                MethodInfo apply = typeof(CardEditorPage).GetMethod(
+                    "ApplyAltArtImage",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                if (apply != null)
+                    apply.Invoke(page, new object[] { image });
+
+                AltArtworkRequest request = page.ReadAltArt();
+                Check("altart page builds the request",
+                    request != null && request.BaseCardId == "TST/01-001" &&
+                    request.AltId == "TST/01-001a" &&
+                    request.Prefix == "TST/01" &&
+                    request.FolderPath == "测试系列/S01" &&
+                    request.ImageSourcePath == image,
+                    request == null ? "null" : request.AltId);
+
+                // 添加卡片 has no base card in CardData, so the block folds away.
+                page.LoadDraft(CardEditorDraft.CreateBlank(series, folder),
+                    series.Folders);
+                Check("altart page folds the block for 添加卡片",
+                    section != null && !section.Visible);
+                Check("altart page refuses a new card",
+                    page.ReadAltArt() == null, StatusText(page));
+
+                page.UnloadDraft();
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// 启动游戏 entry: the exe is found by walking up from the card data folder
+    /// and started with the same `noUpdate` argument as 不热更启动游戏.lnk, so the
+    /// bundled updater never rewrites the card table this app edits. Nothing
+    /// here starts a process, so the group is safe to run unattended.
+    /// </summary>
     private static void TestGameLauncher(Func<CardDatabase> db)
     {
         string dataRoot = db().DataRoot;
