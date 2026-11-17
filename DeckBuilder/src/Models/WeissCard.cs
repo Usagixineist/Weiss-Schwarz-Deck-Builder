@@ -37,7 +37,7 @@ namespace WeissDeckBuilder.Models
         public string[] Traits { get; private set; }
 
         /// <summary>
-        /// 组合名 of the card (the `Combo` line, e.g. 《黒の王》の騎士). About
+        /// 联动名 of the card (the `Combo` line, e.g. 《黒の王》の騎士). About
         /// one character in nine carries it; 编辑卡片 edits it next to the
         /// traits and the effect tree refers to it by name.
         /// </summary>

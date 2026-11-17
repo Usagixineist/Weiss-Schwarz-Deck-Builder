@@ -480,7 +480,7 @@ namespace WeissDeckBuilder.UI
             AddFieldCell(_infoContent, 1, 0, "图片 (Image)", out _imageIdBox);
             AddFieldCell(_infoContent, 0, 1, "卡名", out _nameBox, true);
             AddFieldCell(_infoContent, 0, 2, "日文名 (JPName)", out _jpNameBox, true);
-            AddFieldCell(_infoContent, 0, 3, "组合 (Combo)", out _comboBox, true);
+            AddFieldCell(_infoContent, 0, 3, "联动 (Combo)", out _comboBox, true);
 
             _folderRow = CreateChipRow(true);
             _folderCell = WrapChips("卡包（新卡写入的位置）", _folderRow);
@@ -505,7 +505,7 @@ namespace WeissDeckBuilder.UI
             AddFieldCell(_infoContent, 1, 7, "COST", out _costBox);
             AddFieldCell(_infoContent, 0, 8, "战斗力", out _powerBox);
             AddFieldCell(_infoContent, 1, 8, "灵魂", out _soulBox);
-            AddFieldCell(_infoContent, 0, 9, "应援", out _backupBox);
+            AddFieldCell(_infoContent, 0, 9, "反击", out _backupBox);
             AddFieldCell(_infoContent, 1, 9, "触发 (Soul / Book / Gate)", out _triggerBox);
             AddFieldCell(_infoContent, 0, 10, "特征 1", out _trait1Box);
             AddFieldCell(_infoContent, 1, 10, "特征 2", out _trait2Box);
@@ -587,8 +587,9 @@ namespace WeissDeckBuilder.UI
             column.BackColor = Color.Transparent;
             column.Margin = new Padding(0);
             column.Padding = new Padding(0);
-            column.RowStyles.Add(new RowStyle(SizeType.Percent, 45F));
-            column.RowStyles.Add(new RowStyle(SizeType.Percent, 55F));
+            // 效果内容 : 效果代码 = 1 : 2，代码块通常比卡面文字长得多。
+            column.RowStyles.Add(new RowStyle(SizeType.Percent, 33.34F));
+            column.RowStyles.Add(new RowStyle(SizeType.Percent, 66.66F));
             column.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
             _textBox = CreateField(true);
@@ -802,6 +803,9 @@ namespace WeissDeckBuilder.UI
 
             _refTextBox2 = CreateField(true);
             _refTextBox2.Input.ReadOnly = true;
+            // 不设 Dock 时 FieldBox 会保持默认 200×100 的左上角尺寸，
+            // 点开参考卡时效果框看起来只有一小块，所以这里必须填满行。
+            _refTextBox2.Dock = DockStyle.Fill;
             _refTextBox2.Margin = new Padding(0, 0, 0, 6);
             panel.Controls.Add(_refTextBox2, 0, 3);
 
@@ -809,6 +813,7 @@ namespace WeissDeckBuilder.UI
 
             _refCodeBox = CreateField(true);
             _refCodeBox.Input.ReadOnly = true;
+            _refCodeBox.Dock = DockStyle.Fill;
             _refCodeBox.Margin = new Padding(0);
             panel.Controls.Add(_refCodeBox, 0, 5);
             return panel;
@@ -1006,7 +1011,7 @@ namespace WeissDeckBuilder.UI
             int cost = ParseNumber(_costBox, "COST", _draft.Cost, ref error);
             int power = ParseNumber(_powerBox, "战斗力", _draft.Power, ref error);
             int soul = ParseNumber(_soulBox, "灵魂", _draft.Soul, ref error);
-            int backup = ParseNumber(_backupBox, "应援", _draft.Backup, ref error);
+            int backup = ParseNumber(_backupBox, "反击", _draft.Backup, ref error);
 
             TriggerIcon trigger = TriggerIcon.None;
             string triggerText = _triggerBox.Text.Trim();

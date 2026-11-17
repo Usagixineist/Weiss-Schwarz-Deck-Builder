@@ -2794,6 +2794,10 @@ internal static class SmokeTests
             Check("cardedit page has a combo field",
                 comboBox != null && comboBox.Input.Text == "テストコンボ",
                 comboBox == null ? "null" : comboBox.Input.Text);
+            Check("cardedit page labels the combo field 联动",
+                HasLabelText(page, "联动 (Combo)"));
+            Check("cardedit page labels the backup field 反击",
+                HasLabelText(page, "反击"));
             Check("cardedit page has two reference searches",
                 FindEditorField(page, "_refNameBox") != null &&
                 FindEditorField(page, "_refTextBox") != null);
@@ -2803,6 +2807,14 @@ internal static class SmokeTests
             Check("cardedit page refuses an empty card number",
                 page.ReadDraft() == null);
             SetEditorText(page, "_idBox", "TST/09-E001");
+
+            // 反击 must be an integer, and the complaint has to use the label
+            // the editor shows (the CardData line is still `Backup`).
+            SetEditorText(page, "_backupBox", "abc");
+            Check("cardedit page refuses a broken 反击 value",
+                page.ReadDraft() == null && StatusText(page).Contains("反击"),
+                StatusText(page));
+            SetEditorText(page, "_backupBox", "0");
 
             // Lay the page out at the default window size and paint it once,
             // so a broken table row or a null control fails here instead of on
@@ -2827,6 +2839,30 @@ internal static class SmokeTests
                 Check("cardedit page paints its surface", painted,
                     background.ToString());
             }
+
+            // 中栏 效果内容 : 效果代码 = 1 : 2，右栏参考详情里的两块只读框必须
+            // 填满各自那一行（漏设 Dock 时它们只有 200×100 的默认尺寸）。
+            LayOutDeep(page);
+            FieldBox effectBox = FindEditorField(page, "_textBox");
+            Check("cardedit page splits the effect column 1:2",
+                effectBox != null && codeBox != null && effectBox.Height > 0 &&
+                codeBox.Height >= effectBox.Height * 1.8F &&
+                codeBox.Height <= effectBox.Height * 2.2F,
+                (effectBox == null ? "null" : effectBox.Height.ToString()) + "/" +
+                (codeBox == null ? "null" : codeBox.Height.ToString()));
+
+            Control detailPanel = FindEditorControl(page, "_referenceDetailPanel");
+            if (detailPanel != null)
+                detailPanel.Visible = true;
+            LayOutDeep(page);
+            FieldBox refText = FindEditorField(page, "_refTextBox2");
+            FieldBox refCode = FindEditorField(page, "_refCodeBox");
+            Check("cardedit reference detail boxes fill their rows",
+                refText != null && refCode != null &&
+                refText.Dock == DockStyle.Fill && refCode.Dock == DockStyle.Fill &&
+                refText.Height > 140 && refCode.Height > refText.Height,
+                (refText == null ? "null" : refText.Width + "x" + refText.Height) +
+                "/" + (refCode == null ? "null" : refCode.Width + "x" + refCode.Height));
 
             Check("cardedit page splits 1/4 + 3/8 + 3/8",
                 HasEditorColumns(page), "body columns not found");
@@ -2873,6 +2909,48 @@ internal static class SmokeTests
         FieldBox box = FindEditorField(owner, field);
         if (box != null)
             box.Input.Text = text;
+    }
+
+    private static Control FindEditorControl(object owner, string field)
+    {
+        FieldInfo info = owner.GetType().GetField(field,
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        return info == null ? null : info.GetValue(owner) as Control;
+    }
+
+    /// <summary>
+    /// Lays out the page and every nested table: a page that was never shown
+    /// otherwise only lays out one level deep, so row heights stay defaults.
+    /// </summary>
+    private static void LayOutDeep(Control control)
+    {
+        control.PerformLayout();
+        for (int i = 0; i < control.Controls.Count; i++)
+            LayOutDeep(control.Controls[i]);
+    }
+
+    private static string StatusText(object owner)
+    {
+        FieldInfo info = owner.GetType().GetField("_statusLabel",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        Label label = info == null ? null : info.GetValue(owner) as Label;
+        return label == null ? string.Empty : label.Text;
+    }
+
+    private static bool HasLabelText(Control root, string text)
+    {
+        var label = root as Label;
+        if (label != null && label.Text != null &&
+            label.Text.IndexOf(text, StringComparison.Ordinal) >= 0)
+            return true;
+
+        for (int i = 0; i < root.Controls.Count; i++)
+        {
+            if (HasLabelText(root.Controls[i], text))
+                return true;
+        }
+
+        return false;
     }
 
     private static CardEditorDraft CreateTestDraft(string id)

@@ -79,7 +79,7 @@ namespace WeissDeckBuilder.Data
                     parts.Add("触发 " + Trigger);
                 }
                 if (!string.IsNullOrEmpty(Combo))
-                    parts.Add("组合 " + Combo);
+                    parts.Add("联动 " + Combo);
                 return string.Join(" · ", parts.ToArray());
             }
         }
