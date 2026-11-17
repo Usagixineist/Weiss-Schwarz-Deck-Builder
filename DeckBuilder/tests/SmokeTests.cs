@@ -3649,6 +3649,8 @@ internal static class SmokeTests
             request.BaseCardId = "TST/01-001";
             request.Prefix = "TST/01";
             request.FolderPath = "测试系列/S01";
+            request.FolderFullPath = cardsRoot;
+            request.FileName = "CardData";
             request.AlternateArtworkRoot = altRoot;
             request.AltId = "TST/01-001a";
             request.ImageSourcePath = image;
@@ -3731,6 +3733,19 @@ internal static class SmokeTests
             request.ImageSourcePath = image;
             Check("altart writer refuses a pack without prefix",
                 !AltArtworkWriter.Save(request).Success);
+
+            // A CardData block that already owns the number would win over the
+            // clone, so the writer refuses that number instead of writing art
+            // the loader then drops.
+            File.AppendAllText(cardData,
+                "\r\nCharacter: TST/01-001c\r\nName 同名卡\r\nEndCard\r\n",
+                new UTF8Encoding(false));
+            request.Prefix = "TST/01";
+            request.AltId = "TST/01-001c";
+            AltArtworkResult blocked = AltArtworkWriter.Save(request);
+            Check("altart writer refuses a number CardData already has",
+                !blocked.Success && blocked.Message.Contains("已经有一张"),
+                blocked.Message);
         }
         finally
         {
@@ -3974,6 +3989,8 @@ internal static class SmokeTests
                     request.AltId == "TST/01-001a" &&
                     request.Prefix == "TST/01" &&
                     request.FolderPath == "测试系列/S01" &&
+                    request.FolderFullPath == folder.FullPath &&
+                    request.FileName == "CardData" &&
                     request.ImageSourcePath == image,
                     request == null ? "null" : request.AltId);
 

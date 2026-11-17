@@ -17,6 +17,15 @@ namespace WeissDeckBuilder.Data
         /// <summary>Folder line of the pack (`Aokana/OS05-R05`).</summary>
         public string FolderPath { get; set; }
 
+        /// <summary>
+        /// Full path of the card pack folder, used to look for a real card that
+        /// already owns the variant number.
+        /// </summary>
+        public string FolderFullPath { get; set; }
+
+        /// <summary>CardData file name of the pack, normally "CardData".</summary>
+        public string FileName { get; set; }
+
         /// <summary>Prefix line of the pack (`AW/S18`).</summary>
         public string Prefix { get; set; }
 
@@ -33,6 +42,8 @@ namespace WeissDeckBuilder.Data
         {
             BaseCardId = string.Empty;
             FolderPath = string.Empty;
+            FolderFullPath = string.Empty;
+            FileName = "CardData";
             Prefix = string.Empty;
             AlternateArtworkRoot = string.Empty;
             AltId = string.Empty;
@@ -163,6 +174,15 @@ namespace WeissDeckBuilder.Data
             if (imagePath.Length == 0 || !File.Exists(imagePath))
                 return AltArtworkResult.Fail("请先选择异画卡图。");
 
+            // A CardData block that already carries this number would win over
+            // the clone, so the new image must not use it.
+            if (CardIdExists(request.FolderFullPath, request.FileName, canonicalId))
+            {
+                return AltArtworkResult.Fail(
+                    "卡表里已经有一张 " + canonicalId +
+                    " 的卡块，异画会被它挡住；请换一个字母。");
+            }
+
             string extension = Path.GetExtension(imagePath);
             if (!AltArtworkNaming.IsStoredImageExtension(extension))
             {
@@ -275,6 +295,58 @@ namespace WeissDeckBuilder.Data
 
             canonicalId = baseId + suffix;
             return null;
+        }
+
+        /// <summary>
+        /// True when the pack's CardData already declares this number, i.e. a
+        /// real card would answer to the variant id and the loader would skip
+        /// the clone.
+        /// </summary>
+        private static bool CardIdExists(string folderFullPath, string fileName,
+            string cardId)
+        {
+            if (string.IsNullOrEmpty(folderFullPath) ||
+                !Directory.Exists(folderFullPath) || string.IsNullOrEmpty(cardId))
+            {
+                return false;
+            }
+
+            string path = CardDataWriter.ResolveCardFilePath(folderFullPath, fileName);
+            if (path.Length == 0 || !File.Exists(path))
+                return false;
+
+            string[] lines;
+            try
+            {
+                lines = File.ReadAllLines(path);
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
+            }
+
+            string[] headers = { "Character:", "Event:", "Climax:" };
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string trimmed = (lines[i] ?? string.Empty).Trim();
+                for (int h = 0; h < headers.Length; h++)
+                {
+                    if (!trimmed.StartsWith(headers[h],
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    string id = trimmed.Substring(headers[h].Length).Trim();
+                    if (string.Equals(id, cardId, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+            }
+            return false;
         }
 
         /// <summary>

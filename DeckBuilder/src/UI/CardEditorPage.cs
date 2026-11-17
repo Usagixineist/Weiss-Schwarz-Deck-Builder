@@ -1600,6 +1600,8 @@ namespace WeissDeckBuilder.UI
             request.BaseCardId = AltArtBaseCardId;
             request.Prefix = _draft.Prefix;
             request.FolderPath = _draft.FolderPath;
+            request.FolderFullPath = _draft.FolderFullPath;
+            request.FileName = _draft.FileName;
             request.AlternateArtworkRoot = AlternateArtworkRoot;
             request.AltId = altId;
             request.ImageSourcePath = _altImagePath;
