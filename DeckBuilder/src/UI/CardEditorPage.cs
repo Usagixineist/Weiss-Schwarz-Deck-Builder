@@ -31,7 +31,7 @@ namespace WeissDeckBuilder.UI
         private const int SearchResultLimit = 120;
 
         /// <summary>Height of the 添加异画 block above the reference panel.</summary>
-        private const int AltArtSectionHeight = 146;
+        private const int AltArtSectionHeight = 168;
 
         /// <summary>Width of the 异画 art box inside that block.</summary>
         private const int AltArtImageWidth = 78;

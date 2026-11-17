@@ -3973,6 +3973,19 @@ internal static class SmokeTests
                     altId != null && altId.Input.Text == "TST/01-001a",
                     altId == null ? "null" : altId.Input.Text);
 
+                page.Size = new Size(1400, 900);
+                page.CreateControl();
+                LayOutDeep(page);
+                Control altImage = FindEditorControl(page, "_altImageBox");
+                Check("altart page lays out its block",
+                    altId != null && altId.Width >= 150 && altId.Height >= 26 &&
+                    altImage != null && altImage.Width >= 60 &&
+                    altImage.Height >= 80,
+                    (altId == null ? "null" : altId.Width + "x" + altId.Height) +
+                    " / " + (altImage == null
+                        ? "null"
+                        : altImage.Width + "x" + altImage.Height));
+
                 Check("altart page wants the art first",
                     page.ReadAltArt() == null && StatusText(page).Contains("异画卡图"),
                     StatusText(page));
