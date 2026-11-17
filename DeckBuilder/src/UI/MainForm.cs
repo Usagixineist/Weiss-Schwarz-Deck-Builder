@@ -379,9 +379,8 @@ namespace WeissDeckBuilder.UI
 
             // Grey the entry out when the data folder is not inside a game
             // install, so a missing exe shows up before the click.
-            string launchError;
-            if (GameLauncher.Resolve(_database == null ? null : _database.DataRoot,
-                out launchError) == null)
+            if (GameLauncher.FindGameRoot(
+                _database == null ? null : _database.DataRoot) == null)
             {
                 _navLaunchGameButton.Enabled = false;
                 _navToolTip.SetToolTip(_navLaunchGameButton,
