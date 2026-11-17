@@ -36,6 +36,13 @@ namespace WeissDeckBuilder.Models
         public TriggerIcon Trigger { get; set; }
         public string[] Traits { get; private set; }
 
+        /// <summary>
+        /// 组合名 of the card (the `Combo` line, e.g. 《黒の王》の騎士). About
+        /// one character in nine carries it; 编辑卡片 edits it next to the
+        /// traits and the effect tree refers to it by name.
+        /// </summary>
+        public string Combo { get; set; }
+
         public WeissCard CloneOf { get; set; }
         public List<WeissCard> Clones { get; private set; }
 
@@ -57,6 +64,7 @@ namespace WeissDeckBuilder.Models
             ImageId = string.Empty;
             Text = string.Empty;
             EffectCode = string.Empty;
+            Combo = string.Empty;
             Color = CardColor.Undefined;
             Category = CardCategory.Character;
             Trigger = TriggerIcon.None;
@@ -143,6 +151,7 @@ namespace WeissDeckBuilder.Models
             Traits[0] = source.Traits[0];
             Traits[1] = source.Traits[1];
             Traits[2] = source.Traits[2];
+            Combo = source.Combo;
             Trigger = source.Trigger;
             SeriesName = source.SeriesName;
             SetName = source.SetName;

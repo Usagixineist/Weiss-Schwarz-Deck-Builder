@@ -37,6 +37,16 @@ namespace WeissDeckBuilder.Data
         public string ImageId { get; set; }
         public string Text { get; set; }
         public string EffectCode { get; set; }
+
+        /// <summary>
+        /// 效果内容 the card had when it was opened. A block without a `Text`
+        /// line gets one only when the player changed the text, because the
+        /// text of a `*Shorthand` card comes from CommonEffects.txt and must
+        /// not be duplicated on save.
+        /// </summary>
+        public string OriginalText { get; set; }
+
+        public string Combo { get; set; }
         public string Trait1 { get; set; }
         public string Trait2 { get; set; }
         public string Trait3 { get; set; }
@@ -77,6 +87,8 @@ namespace WeissDeckBuilder.Data
             ImageId = string.Empty;
             Text = string.Empty;
             EffectCode = string.Empty;
+            OriginalText = string.Empty;
+            Combo = string.Empty;
             Trait1 = string.Empty;
             Trait2 = string.Empty;
             Trait3 = string.Empty;
@@ -119,6 +131,8 @@ namespace WeissDeckBuilder.Data
             draft.ImageId = card.ImageId ?? string.Empty;
             draft.Text = card.Text ?? string.Empty;
             draft.EffectCode = card.EffectCode ?? string.Empty;
+            draft.OriginalText = draft.Text;
+            draft.Combo = card.Combo ?? string.Empty;
             draft.Trait1 = card.Traits.Length > 0 ? card.Traits[0] : string.Empty;
             draft.Trait2 = card.Traits.Length > 1 ? card.Traits[1] : string.Empty;
             draft.Trait3 = card.Traits.Length > 2 ? card.Traits[2] : string.Empty;

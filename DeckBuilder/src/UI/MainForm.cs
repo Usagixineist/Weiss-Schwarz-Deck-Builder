@@ -64,7 +64,13 @@ namespace WeissDeckBuilder.UI
             /// 第二级 of 编辑卡片: the card list of one series. A click opens the
             /// editor instead of the card detail page.
             /// </summary>
-            CardEditCards
+            CardEditCards,
+
+            /// <summary>
+            /// The editor itself (修改卡片 / 添加卡片). It is a normal content
+            /// page, not an overlay, so Esc / 取消 returns to the card list.
+            /// </summary>
+            CardEditor
         }
 
         private enum SeriesSortMode
@@ -1905,6 +1911,14 @@ namespace WeissDeckBuilder.UI
                 }
 
                 DeckDetailBack_Click(null, EventArgs.Empty);
+                return true;
+            }
+
+            if (keyData == Keys.Escape && _viewMode == ViewMode.CardEditor)
+            {
+                // The editor page handles Esc itself; this is the fallback for
+                // the case where the window and not the page holds the focus.
+                CancelCardEditor();
                 return true;
             }
 

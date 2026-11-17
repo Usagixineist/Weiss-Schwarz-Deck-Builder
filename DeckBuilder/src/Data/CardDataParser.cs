@@ -21,6 +21,7 @@ namespace WeissDeckBuilder.Data
         Trait1,
         Trait2,
         Trait3,
+        Combo,
         Text,
         Clone,
         CustomTriggerIcon
@@ -196,6 +197,9 @@ namespace WeissDeckBuilder.Data
 
                     if (trimmed.StartsWith("*", StringComparison.Ordinal))
                     {
+                        // The shorthand line stays in the effect code so 编辑卡片
+                        // shows it and the writer can put it back untouched.
+                        current.EffectLines.Add(line);
                         ApplyShorthand(current, trimmed.Substring(1).Trim(), commonEffects);
                         continue;
                     }
@@ -244,6 +248,9 @@ namespace WeissDeckBuilder.Data
                             break;
                         case "trait3":
                             AddTextCommand(current, CardCommandKind.Trait3, value);
+                            break;
+                        case "combo":
+                            AddTextCommand(current, CardCommandKind.Combo, value);
                             break;
                         case "text":
                             AddTextCommand(current, CardCommandKind.Text,
@@ -473,6 +480,9 @@ namespace WeissDeckBuilder.Data
                         break;
                     case CardCommandKind.Trait3:
                         card.Traits[2] = command.Text;
+                        break;
+                    case CardCommandKind.Combo:
+                        card.Combo = command.Text;
                         break;
                     case CardCommandKind.Text:
                         AppendText(card, command.Text);

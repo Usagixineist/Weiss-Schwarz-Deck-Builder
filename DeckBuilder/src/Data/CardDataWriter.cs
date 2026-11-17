@@ -144,26 +144,13 @@ namespace WeissDeckBuilder.Data
             var lines = new List<string>();
             lines.Add(CategoryKey(draft.Category) + ": " +
                 (draft.Id ?? string.Empty).Trim());
-            AddField(lines, "Name", draft.Name);
-            AddField(lines, "JpName", draft.JapaneseName);
-            AddField(lines, "Image", draft.ImageId);
 
-            if (draft.Color != CardColor.Undefined)
-                lines.Add("Color " + ColorKey(draft.Color));
-
-            lines.Add("Level " + Math.Max(0, draft.Level));
-            lines.Add("Cost " + Math.Max(0, draft.Cost));
-            if (draft.Category == CardCategory.Character)
-                lines.Add("Power " + Math.Max(0, draft.Power));
-            lines.Add("Soul " + Math.Max(0, draft.Soul));
-            if (draft.Trigger != TriggerIcon.None)
-                lines.Add("Trigger " + draft.Trigger.ToString());
-            if (draft.Backup > 0)
-                lines.Add("Backup " + draft.Backup);
-
-            AddField(lines, "Trait1", draft.Trait1);
-            AddField(lines, "Trait2", draft.Trait2);
-            AddField(lines, "Trait3", draft.Trait3);
+            List<FieldLine> fields = BuildFieldLines(draft);
+            for (int i = 0; i < fields.Count; i++)
+            {
+                if (fields[i].Line != null)
+                    lines.Add(fields[i].Line);
+            }
 
             AppendEffectCode(lines, draft.EffectCode);
 
@@ -175,7 +162,248 @@ namespace WeissDeckBuilder.Data
             return string.Join("\n", lines.ToArray());
         }
 
-        /// <summary>Line based split that keeps an empty entry after a final newline.</summary>
+        /// <summary>One `Key value` line the card editor owns.</summary>
+        private sealed class FieldLine
+        {
+            /// <summary>Lower case field key as it appears in CardData.txt.</summary>
+            public string Key;
+
+            /// <summary>The new line, or null when the field carries no value.</summary>
+            public string Line;
+
+            /// <summary>
+            /// True when a block that never had this line gets it added. The
+            /// game leaves `Soul 1` and a climax's `Level 0` implicit, so the
+            /// writer only adds numbers that carry information.
+            /// </summary>
+            public bool InsertWhenMissing;
+        }
+
+        private static void AddTextField(List<FieldLine> fields, string key,
+            string label, string value)
+        {
+            string text = (value ?? string.Empty).Trim();
+            fields.Add(new FieldLine
+            {
+                Key = key,
+                Line = text.Length == 0 ? null : label + " " + text,
+                InsertWhenMissing = text.Length > 0
+            });
+        }
+
+        /// <summary>
+        /// The fields 编辑卡片 edits, in the order the game's own files write
+        /// them. Values the cards of a category never carry (a climax has no
+        /// Power, an event no Soul) come back as a null line, so the writer
+        /// drops such a line instead of inventing one.
+        /// </summary>
+        private static List<FieldLine> BuildFieldLines(CardEditorDraft draft)
+        {
+            var fields = new List<FieldLine>();
+            bool character = draft.Category == CardCategory.Character;
+            bool climax = draft.Category == CardCategory.Climax;
+
+            AddTextField(fields, "name", "Name", draft.Name);
+            AddTextField(fields, "jpname", "JPName", draft.JapaneseName);
+            AddTextField(fields, "image", "Image", draft.ImageId);
+
+            // Most climax blocks carry no Color line at all, so an undefined
+            // color must not become "Color" without a value.
+            fields.Add(new FieldLine
+            {
+                Key = "color",
+                Line = draft.Color == CardColor.Undefined
+                    ? null
+                    : "Color " + ColorKey(draft.Color),
+                InsertWhenMissing = draft.Color != CardColor.Undefined
+            });
+
+            fields.Add(new FieldLine
+            {
+                Key = "level",
+                Line = climax && draft.Level <= 0
+                    ? null
+                    : "Level " + Math.Max(0, draft.Level),
+                InsertWhenMissing = !climax || draft.Level > 0
+            });
+            fields.Add(new FieldLine
+            {
+                Key = "cost",
+                Line = climax && draft.Cost <= 0
+                    ? null
+                    : "Cost " + Math.Max(0, draft.Cost),
+                InsertWhenMissing = !climax || draft.Cost > 0
+            });
+            fields.Add(new FieldLine
+            {
+                Key = "power",
+                Line = character ? "Power " + Math.Max(0, draft.Power) : null,
+                InsertWhenMissing = character && draft.Power > 0
+            });
+            fields.Add(new FieldLine
+            {
+                Key = "soul",
+                Line = draft.Soul > 0 ? "Soul " + draft.Soul : null,
+                InsertWhenMissing = draft.Soul > 1
+            });
+            fields.Add(new FieldLine
+            {
+                Key = "trigger",
+                Line = draft.Trigger == TriggerIcon.None
+                    ? null
+                    : "Trigger " + draft.Trigger,
+                InsertWhenMissing = draft.Trigger != TriggerIcon.None
+            });
+            fields.Add(new FieldLine
+            {
+                Key = "backup",
+                Line = draft.Backup > 0 ? "Backup " + draft.Backup : null,
+                InsertWhenMissing = draft.Backup > 0
+            });
+
+            AddTextField(fields, "trait1", "Trait1", draft.Trait1);
+            AddTextField(fields, "trait2", "Trait2", draft.Trait2);
+            AddTextField(fields, "trait3", "Trait3", draft.Trait3);
+            AddTextField(fields, "combo", "Combo", draft.Combo);
+            return fields;
+        }
+
+        /// <summary>
+        /// Rewrites one existing block: every line the editor does not own
+        /// (ability headers, `{ }` code, `*Shorthand`, `Requirement`, `Tag`,
+        /// comments) is copied back untouched, so editing a card that uses a
+        /// shorthand keeps the shorthand instead of exploding it. Only the
+        /// values that actually changed are rewritten, and a missing field is
+        /// added only when it carries information the game does not default to.
+        /// </summary>
+        private static string[] PatchBlock(IList<string> block, CardEditorDraft draft)
+        {
+            if (block == null || block.Count == 0)
+                return SplitLines(BuildBlock(draft));
+
+            var output = new List<string>();
+            output.Add(CategoryKey(draft.Category) + ": " +
+                (draft.Id ?? string.Empty).Trim());
+
+            List<FieldLine> fields = BuildFieldLines(draft);
+            var fieldByKey = new Dictionary<string, FieldLine>(StringComparer.Ordinal);
+            var inserted = new HashSet<string>(StringComparer.Ordinal);
+            var present = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < fields.Count; i++)
+                fieldByKey[fields[i].Key] = fields[i];
+
+            // Line 0 is the header and the last line is EndCard (Save already
+            // refused a block without one), so the body is everything between.
+            int last = block.Count - 1;
+            var others = new List<string>();
+            var textValues = new List<string>();
+            var body = new List<BodyLine>();
+            int depth = 0;
+            for (int i = 1; i < last; i++)
+            {
+                string line = block[i] ?? string.Empty;
+                string trimmed = line.Trim();
+                if (trimmed.StartsWith("}", StringComparison.Ordinal))
+                    depth = Math.Max(0, depth - 1);
+
+                string key = string.Empty;
+                string value = string.Empty;
+                bool isField = depth == 0 &&
+                    TryReadOwnedField(trimmed, fieldByKey, out key, out value);
+                if (isField)
+                {
+                    present.Add(key);
+                    if (key == "text")
+                        textValues.Add(CommonEffectLibrary.DecodeText(value));
+                    else
+                        body.Add(BodyLine.Field(key));
+                    continue;
+                }
+
+                if (trimmed.StartsWith("{", StringComparison.Ordinal))
+                    depth++;
+                others.Add(line);
+                body.Add(BodyLine.Other());
+            }
+
+            // The 效果代码 box holds exactly the lines the parser did not turn
+            // into card fields, so comparing the two tells whether the player
+            // touched the effect tree at all.
+            string[] newCode = NormalizeCode(SplitLines(draft.EffectCode));
+            string[] oldCode = NormalizeCode(others);
+            bool codeChanged = !SequenceEqual(newCode, oldCode);
+
+            bool codeEmitted = false;
+            for (int i = 0; i < body.Count; i++)
+            {
+                BodyLine item = body[i];
+                if (item.Key != null)
+                {
+                    FieldLine field = fieldByKey[item.Key];
+                    if (field.Line == null)
+                        continue;
+
+                    output.Add(field.Line);
+                    inserted.Add(item.Key);
+                    continue;
+                }
+
+                if (codeEmitted)
+                    continue;
+
+                codeEmitted = true;
+                if (codeChanged)
+                    output.AddRange(newCode);
+                else
+                    output.AddRange(others);
+            }
+
+            for (int i = 0; i < fields.Count; i++)
+            {
+                FieldLine field = fields[i];
+                if (field.Line == null || !field.InsertWhenMissing)
+                    continue;
+                if (present.Contains(field.Key) || inserted.Contains(field.Key))
+                    continue;
+
+                output.Add(field.Line);
+            }
+
+            string text = EncodeText(draft.Text);
+            string currentText = NormalizeText(SplitLines(draft.Text));
+            bool textChanged = present.Contains("text")
+                ? !string.Equals(currentText, NormalizeText(textValues),
+                    StringComparison.Ordinal)
+                : !string.Equals(currentText,
+                    NormalizeText(SplitLines(draft.OriginalText ?? string.Empty)),
+                    StringComparison.Ordinal);
+            if (text.Length > 0 && (present.Contains("text") || textChanged))
+                output.Add("Text " + text);
+
+            output.Add("EndCard");
+            return output.ToArray();
+        }
+
+        /// <summary>A body line of an existing block: an owned field or verbatim text.</summary>
+        private sealed class BodyLine
+        {
+            /// <summary>Field key for an owned field, null for a verbatim line.</summary>
+            public string Key;
+
+            public static BodyLine Field(string key)
+            {
+                var line = new BodyLine();
+                line.Key = key;
+                return line;
+            }
+
+            public static BodyLine Other()
+            {
+                return new BodyLine();
+            }
+        }
+
+
         public static string[] SplitLines(string text)
         {
             if (string.IsNullOrEmpty(text))
@@ -199,11 +427,106 @@ namespace WeissDeckBuilder.Data
             return lines.ToArray();
         }
 
-        private static void AddField(List<string> lines, string key, string value)
+        /// <summary>
+        /// Reads `Key value` for a field the editor owns. Ability headers
+        /// (`Act: ...`), shorthand lines (`*Healer`), braces and comments all
+        /// return false and stay in the 效果代码 half untouched.
+        /// </summary>
+        private static bool TryReadOwnedField(string trimmed,
+            IDictionary<string, FieldLine> owned, out string key, out string value)
         {
-            if (string.IsNullOrEmpty(value) || value.Trim().Length == 0)
-                return;
-            lines.Add(key + " " + value.Trim());
+            key = string.Empty;
+            value = string.Empty;
+            if (trimmed.Length == 0 ||
+                trimmed.StartsWith("*", StringComparison.Ordinal) ||
+                trimmed.StartsWith("//", StringComparison.Ordinal) ||
+                trimmed.StartsWith("#", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            int space = trimmed.IndexOf(' ');
+            string token = space < 0 ? trimmed : trimmed.Substring(0, space);
+            if (token.Length == 0 || token.EndsWith(":", StringComparison.Ordinal))
+                return false;
+
+            for (int i = 0; i < token.Length; i++)
+            {
+                char ch = token[i];
+                if (!char.IsLetterOrDigit(ch) && ch != '_')
+                    return false;
+            }
+
+            string candidate = token.ToLowerInvariant();
+            if (candidate != "text" && !owned.ContainsKey(candidate))
+                return false;
+
+            key = candidate;
+            value = space < 0 ? string.Empty : trimmed.Substring(space + 1);
+            return true;
+        }
+
+        /// <summary>
+        /// Effect code without the empty lines, so a code box that merely lost
+        /// trailing blanks does not count as an edit.
+        /// </summary>
+        private static string[] NormalizeCode(IList<string> lines)
+        {
+            if (lines == null)
+                return new string[0];
+
+            var result = new List<string>();
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string line = lines[i] ?? string.Empty;
+                if (line.Trim().Length == 0)
+                    continue;
+                result.Add(line.TrimEnd());
+            }
+            return result.ToArray();
+        }
+
+        private static string NormalizeText(IList<string> lines)
+        {
+            if (lines == null || lines.Count == 0)
+                return string.Empty;
+
+            var parts = new List<string>();
+            for (int i = 0; i < lines.Count; i++)
+            {
+                string value = NormalizeTextValue(lines[i] ?? string.Empty);
+                if (value.Length > 0)
+                    parts.Add(value);
+            }
+            return string.Join("\n", parts.ToArray());
+        }
+
+        private static string NormalizeTextValue(string value)
+        {
+            string[] parts = SplitLines(CommonEffectLibrary.DecodeText(value));
+            var cleaned = new List<string>();
+            for (int i = 0; i < parts.Length; i++)
+            {
+                string line = parts[i].Trim();
+                if (line.Length > 0)
+                    cleaned.Add(line);
+            }
+            return string.Join("\n", cleaned.ToArray());
+        }
+
+        private static bool SequenceEqual(string[] left, string[] right)
+        {
+            if (left == null || right == null)
+                return left == right;
+            if (left.Length != right.Length)
+                return false;
+
+            for (int i = 0; i < left.Length; i++)
+            {
+                if (!string.Equals(left[i], right[i], StringComparison.Ordinal))
+                    return false;
+            }
+            return true;
         }
 
         private static void AppendEffectCode(List<string> lines, string code)
@@ -393,8 +716,10 @@ namespace WeissDeckBuilder.Data
                     matchId + "（" + path + "）");
             }
 
-            string[] block = SplitLines(BuildBlock(draft));
             bool added = start < 0;
+            string[] block = added
+                ? SplitLines(BuildBlock(draft))
+                : PatchBlock(lines.GetRange(start, end - start + 1), draft);
             if (added)
             {
                 if (lines.Count > 0 && lines[lines.Count - 1].Length > 0)

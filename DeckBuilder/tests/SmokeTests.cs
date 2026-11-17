@@ -7,6 +7,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Threading;
+using System.Windows.Forms;
 using WeissDeckBuilder.Data;
 using WeissDeckBuilder.Infrastructure;
 using WeissDeckBuilder.Models;
@@ -74,7 +75,7 @@ internal static class SmokeTests
             new TestGroup("collection", "我的收藏：数量文件与存储", false,
                 db => TestCollectionStore()),
             new TestGroup("cardedit", "编辑卡片：卡块生成、写回与编辑器", false,
-                db => { TestCardEditor(); TestCardEditorOverlay(); })
+                db => { TestCardEditor(); TestCardEditorPage(); })
         };
     }
 
@@ -2709,23 +2710,25 @@ internal static class SmokeTests
     {
         TestCardEditorBlock();
         TestCardEditorSave();
+        TestCardEditorPatch();
         TestCardEditorEncoding();
         TestCardEditorImage();
+        TestCardReferenceIndex();
     }
 
     /// <summary>
-    /// Builds the real editor layer on an STA thread, the same way the import
+    /// Builds the real 编辑卡片 page on an STA thread, the same way the import
     /// overlay test does, so a layout or control mistake fails the suite
     /// instead of the first user who opens 编辑卡片.
     /// </summary>
-    private static void TestCardEditorOverlay()
+    private static void TestCardEditorPage()
     {
         Exception error = null;
         var worker = new Thread(delegate()
         {
             try
             {
-                TestCardEditorOverlayCore();
+                TestCardEditorPageCore();
             }
             catch (Exception ex)
             {
@@ -2737,10 +2740,10 @@ internal static class SmokeTests
         worker.Start();
         worker.Join();
         if (error != null)
-            Fail("cardedit editor layer runs without a screen", error.ToString());
+            Fail("cardedit editor page runs without a screen", error.ToString());
     }
 
-    private static void TestCardEditorOverlayCore()
+    private static void TestCardEditorPageCore()
     {
         var series = new SeriesDefinition("测试系列");
         var folder = CreateTestFolder(Path.GetTempPath());
@@ -2752,80 +2755,122 @@ internal static class SmokeTests
         draft.Level = 2;
         draft.Power = 6000;
         draft.Trigger = TriggerIcon.Book;
+        draft.Combo = "テストコンボ";
         draft.EffectCode = "Auto: OnAttack\n{\n        Draw 1\n}";
 
-        using (var overlay = new CardEditorOverlay())
+        using (var page = new CardEditorPage())
         {
             int closings = 0;
-            overlay.CloseRequested += delegate { closings++; };
-            overlay.ShowEditor(draft, null, series.Folders);
+            page.CloseRequested += delegate { closings++; };
+            page.SaveRequested += delegate { };
+            page.LoadDraft(draft, series.Folders);
 
-            Check("cardedit editor shows the draft",
-                overlay.Draft != null && overlay.Draft.Name == "编辑器测试",
-                overlay.Draft == null ? "null" : overlay.Draft.Name);
+            Check("cardedit page shows the draft",
+                page.Draft != null && page.Draft.Name == "编辑器测试",
+                page.Draft == null ? "null" : page.Draft.Name);
 
-            CardEditorDraft read = overlay.ReadDraft();
-            Check("cardedit editor reads the fields back",
+            CardEditorDraft read = page.ReadDraft();
+            Check("cardedit page reads the fields back",
                 read != null && read.Id == "TST/09-E001" && read.Level == 2 &&
                 read.Power == 6000 && read.Trigger == TriggerIcon.Book,
                 read == null ? "null" : read.Id + "/" + read.Level);
-            Check("cardedit editor keeps the effect code",
+            Check("cardedit page keeps the combo",
+                read != null && read.Combo == "テストコンボ",
+                read == null ? "null" : read.Combo);
+            Check("cardedit page keeps the effect code",
                 read != null && read.EffectCode.Contains("Draw 1"),
                 read == null ? "null" : read.EffectCode);
 
-            FieldInfo codeField = typeof(CardEditorOverlay).GetField("_codeBox",
+            FieldInfo codeField = typeof(CardEditorPage).GetField("_codeBox",
                 BindingFlags.Instance | BindingFlags.NonPublic);
-            var codeBox = codeField == null ? null : codeField.GetValue(overlay) as FieldBox;
-            Check("cardedit editor code box is multiline",
+            var codeBox = codeField == null ? null : codeField.GetValue(page) as FieldBox;
+            Check("cardedit page code box is multiline",
                 codeBox != null && codeBox.Input.Multiline);
-            Check("cardedit editor code box keeps the line breaks",
+            Check("cardedit page code box keeps the line breaks",
                 codeBox != null && codeBox.Input.Text.Contains("\r\n"),
                 codeBox == null ? "null" : codeBox.Input.Text);
 
-            // A blank 卡号 must be refused instead of writing a broken block.
-            SetEditorText(overlay, "_idBox", string.Empty);
-            Check("cardedit editor refuses an empty card number",
-                overlay.ReadDraft() == null);
-            SetEditorText(overlay, "_idBox", "TST/09-E001");
+            FieldBox comboBox = FindEditorField(page, "_comboBox");
+            Check("cardedit page has a combo field",
+                comboBox != null && comboBox.Input.Text == "テストコンボ",
+                comboBox == null ? "null" : comboBox.Input.Text);
+            Check("cardedit page has two reference searches",
+                FindEditorField(page, "_refNameBox") != null &&
+                FindEditorField(page, "_refTextBox") != null);
 
-            // Lay the layer out at the default window size and paint it once,
+            // A blank 卡号 must be refused instead of writing a broken block.
+            SetEditorText(page, "_idBox", string.Empty);
+            Check("cardedit page refuses an empty card number",
+                page.ReadDraft() == null);
+            SetEditorText(page, "_idBox", "TST/09-E001");
+
+            // Lay the page out at the default window size and paint it once,
             // so a broken table row or a null control fails here instead of on
             // the first machine that opens 编辑卡片.
-            overlay.Size = new Size(1400, 900);
-            overlay.CreateControl();
-            overlay.PerformLayout();
+            page.Size = new Size(1400, 900);
+            page.CreateControl();
+            page.PerformLayout();
             using (var bitmap = new Bitmap(1400, 900))
             {
-                overlay.DrawToBitmap(bitmap, new Rectangle(0, 0, 1400, 900));
-                Check("cardedit editor paints without a screen",
+                page.DrawToBitmap(bitmap, new Rectangle(0, 0, 1400, 900));
+                Check("cardedit page paints without a screen",
                     bitmap.Width == 1400 && bitmap.Height == 900);
 
-                bool foundPopup = false;
-                Color popup = Color.FromArgb(23, 33, 48);
-                for (int y = 60; y < 860 && !foundPopup; y += 10)
+                Color background = page.BackColor;
+                bool painted = false;
+                for (int y = 60; y < 860 && !painted; y += 10)
                 {
-                    for (int x = 130; x < 1270 && !foundPopup; x += 10)
-                        foundPopup = bitmap.GetPixel(x, y).ToArgb() == popup.ToArgb();
+                    for (int x = 130; x < 1270 && !painted; x += 10)
+                        painted = bitmap.GetPixel(x, y).ToArgb() !=
+                            Color.Black.ToArgb();
                 }
-                Check("cardedit editor paints the popup surface", foundPopup);
+                Check("cardedit page paints its surface", painted,
+                    background.ToString());
             }
 
-            overlay.HideEditor();
-            Check("cardedit editor folds away", !overlay.Visible);
-            Check("cardedit editor did not close itself", closings == 0,
+            Check("cardedit page splits 1/4 + 3/8 + 3/8",
+                HasEditorColumns(page), "body columns not found");
+
+            page.UnloadDraft();
+            Check("cardedit page drops the draft", page.Draft == null);
+            Check("cardedit page did not close itself", closings == 0,
                 "closes=" + closings);
         }
     }
 
-    private static void SetEditorText(CardEditorOverlay overlay, string field,
-        string text)
+    /// <summary>
+    /// Finds the 1/4 + 3/8 + 3/8 body table the editor page builds.
+    /// </summary>
+    private static bool HasEditorColumns(Control root)
     {
-        FieldInfo info = typeof(CardEditorOverlay).GetField(field,
-            BindingFlags.Instance | BindingFlags.NonPublic);
-        if (info == null)
-            return;
+        var panel = root as TableLayoutPanel;
+        if (panel != null && panel.ColumnStyles.Count == 3)
+        {
+            if (panel.ColumnStyles[0].Width == 25F &&
+                panel.ColumnStyles[1].Width == 37.5F &&
+                panel.ColumnStyles[2].Width == 37.5F)
+                return true;
+        }
 
-        var box = info.GetValue(overlay) as FieldBox;
+        for (int i = 0; i < root.Controls.Count; i++)
+        {
+            if (HasEditorColumns(root.Controls[i]))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static FieldBox FindEditorField(object owner, string field)
+    {
+        FieldInfo info = owner.GetType().GetField(field,
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        return info == null ? null : info.GetValue(owner) as FieldBox;
+    }
+
+    private static void SetEditorText(object owner, string field, string text)
+    {
+        FieldBox box = FindEditorField(owner, field);
         if (box != null)
             box.Input.Text = text;
     }
@@ -2846,6 +2891,7 @@ internal static class SmokeTests
         draft.Backup = 500;
         draft.Trait1 = "テスト";
         draft.Trait2 = "カード";
+        draft.Combo = "テストコンボ";
         draft.Text = "【自】第一行\n第二行";
         draft.EffectCode = "Auto: StartClimaxPhase\n{\n        PayCost Clock\n}";
         return draft;
@@ -2880,6 +2926,11 @@ internal static class SmokeTests
             block.StartsWith("Character: TST/01-E001", StringComparison.Ordinal),
             block);
         Check("cardedit block name", block.Contains("Name 测试卡"), block);
+        Check("cardedit block writes the JP name",
+            block.Contains("JPName テストカード") && !block.Contains("JpName "),
+            block);
+        Check("cardedit block writes the combo",
+            block.Contains("Combo テストコンボ"), block);
         Check("cardedit block color", block.Contains("Color R"), block);
         Check("cardedit block power", block.Contains("Power 5000"), block);
         Check("cardedit block trigger", block.Contains("Trigger Soul"), block);
@@ -2897,6 +2948,21 @@ internal static class SmokeTests
         Check("cardedit event block drops Power",
             !CardDataWriter.BuildBlock(eventDraft).Contains("Power "),
             CardDataWriter.BuildBlock(eventDraft));
+
+        // A climax carries neither Power nor a redundant Level 0 / Cost 0.
+        CardEditorDraft climaxDraft = CreateTestDraft("TST/01-E003");
+        climaxDraft.Category = CardCategory.Climax;
+        climaxDraft.Level = 0;
+        climaxDraft.Cost = 0;
+        climaxDraft.Power = 0;
+        climaxDraft.Backup = 0;
+        string climaxBlock = CardDataWriter.BuildBlock(climaxDraft);
+        Check("cardedit climax block drops Power",
+            !climaxBlock.Contains("Power "), climaxBlock);
+        Check("cardedit climax block drops Level 0",
+            !climaxBlock.Contains("Level 0"), climaxBlock);
+        Check("cardedit climax block drops Cost 0",
+            !climaxBlock.Contains("Cost 0"), climaxBlock);
     }
 
     private static void TestCardEditorSave()
@@ -3016,6 +3082,180 @@ internal static class SmokeTests
     /// A card pack file is not always UTF-8 with BOM. Saving one card must not
     /// rewrite the encoding or the line endings of the cards around it.
     /// </summary>
+    /// <summary>
+    /// Rewriting a block only touches the edited fields: the shorthand, the
+    /// Requirement line and the hand written text stay exactly as they were.
+    /// </summary>
+    private static void TestCardEditorPatch()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-cardpatch-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+            string path = Path.Combine(root, "CardData.txt");
+            string original =
+                "Character: TST/05-E001\r\n" +
+                "Name 简写卡\r\n" +
+                "JPName テスト\r\n" +
+                "Color R\r\n" +
+                "Level 1\r\n" +
+                "Cost 0\r\n" +
+                "Power 5000\r\n" +
+                "Soul 1\r\n" +
+                "Trait1 テスト\r\n" +
+                "Combo テストコンボ\r\n" +
+                "Requirement StageContains 1 IsColor Red\r\n" +
+                "*1000Assist\r\n" +
+                "Text 原文\r\n" +
+                "EndCard\r\n";
+            File.WriteAllText(path, original, new UTF8Encoding(false));
+
+            List<WeissCard> cards = ParseTestFolder(folder);
+            Check("cardedit patch parses the shorthand card", cards.Count == 1,
+                cards.Count.ToString());
+            WeissCard card = cards.Count > 0 ? cards[0] : null;
+            Check("cardedit patch keeps the shorthand code",
+                card != null && card.EffectCode.Contains("*1000Assist"),
+                card == null ? "null" : card.EffectCode);
+            Check("cardedit patch keeps the requirement",
+                card != null && card.EffectCode.Contains("Requirement"),
+                card == null ? "null" : card.EffectCode);
+            Check("cardedit patch reads the combo",
+                card != null && card.Combo == "テストコンボ",
+                card == null ? "null" : card.Combo);
+
+            CardEditorDraft draft = CardEditorDraft.FromCard(card, folder);
+            draft.Name = "改名卡";
+            draft.Level = 2;
+            CardWriteResult saved = CardDataWriter.Save(draft);
+            Check("cardedit patch save succeeds", saved.Success, saved.Message);
+
+            string after = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit patch writes the new name",
+                after.Contains("Name 改名卡"), after);
+            Check("cardedit patch writes the new level",
+                after.Contains("Level 2"), after);
+            Check("cardedit patch keeps the shorthand line",
+                after.Contains("*1000Assist"), after);
+            Check("cardedit patch keeps the requirement line",
+                after.Contains("Requirement StageContains 1 IsColor Red"), after);
+            Check("cardedit patch keeps the combo line",
+                after.Contains("Combo テストコンボ"), after);
+            Check("cardedit patch keeps the text once",
+                CountOccurrences(after, "Text 原文") == 1, after);
+            Check("cardedit patch keeps the soul line once",
+                CountOccurrences(after, "Soul 1") == 1, after);
+            Check("cardedit patch keeps one card", ParseTestFolder(folder).Count == 1,
+                after);
+
+            // Renaming the 卡号 rewrites the header and nothing else.
+            draft.Id = "TST/05-E002";
+            CardWriteResult renamed = CardDataWriter.Save(draft);
+            Check("cardedit patch rename succeeds", renamed.Success,
+                renamed.Message);
+            string header = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit patch rewrites the header",
+                header.Contains("Character: TST/05-E002") &&
+                !header.Contains("TST/05-E001"), header);
+            Check("cardedit patch keeps a single card after renaming",
+                ParseTestFolder(folder).Count == 1, header);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// The 参考 panel searches 卡名 / 卡号 in one box and the effect text or the
+    /// ability code in the other one, across every pack.
+    /// </summary>
+    private static void TestCardReferenceIndex()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-cardref-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string folderA = Path.Combine(root, "系列A", "S01");
+            string folderB = Path.Combine(root, "系列B", "W02");
+            Directory.CreateDirectory(folderA);
+            Directory.CreateDirectory(folderB);
+            File.WriteAllText(Path.Combine(folderA, "CardData.txt"),
+                "Character: A/S01-001\r\n" +
+                "Name 火の勇者\r\n" +
+                "Level 1\r\n" +
+                "Cost 0\r\n" +
+                "Power 5000\r\n" +
+                "Text 你的角色力量+1000\r\n" +
+                "EndCard\r\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(folderB, "CardData.txt"),
+                "Event: B/W02-010\r\n" +
+                "Name 氷の魔法\r\n" +
+                "Level 2\r\n" +
+                "Cost 1\r\n" +
+                "Text 你抽1张卡\r\n" +
+                "EndCard\r\n", new UTF8Encoding(false));
+
+            var folders = new List<CardReferenceFolder>();
+            var first = new CardReferenceFolder();
+            first.SeriesName = "系列A";
+            first.SetName = "S01";
+            first.FolderPath = "系列A/S01";
+            first.FolderFullPath = folderA;
+            first.FileName = "CardData";
+            folders.Add(first);
+
+            var second = new CardReferenceFolder();
+            second.SeriesName = "系列B";
+            second.SetName = "W02";
+            second.FolderPath = "系列B/W02";
+            second.FolderFullPath = folderB;
+            second.FileName = "CardData";
+            folders.Add(second);
+
+            CardReferenceIndex index = CardReferenceIndex.Build(folders,
+                CommonEffectLibrary.Empty, null, null);
+            Check("cardref reads both packs", index.Count == 2,
+                index.Count.ToString());
+
+            List<CardReferenceEntry> byCode = index.Search("A/S01-001",
+                string.Empty, 20);
+            Check("cardref finds a full card number",
+                byCode.Count == 1 && byCode[0].Name == "火の勇者",
+                byCode.Count.ToString());
+
+            List<CardReferenceEntry> byName = index.Search("氷", string.Empty, 20);
+            Check("cardref matches a name",
+                byName.Count == 1 && byName[0].Id == "B/W02-010",
+                byName.Count.ToString());
+
+            List<CardReferenceEntry> byText = index.Search(string.Empty,
+                "力量+1000", 20);
+            Check("cardref matches the effect text",
+                byText.Count == 1 && byText[0].Id == "A/S01-001",
+                byText.Count.ToString());
+
+            List<CardReferenceEntry> byOtherText = index.Search(string.Empty,
+                "抽1张卡", 20);
+            Check("cardref reads the other pack",
+                byOtherText.Count == 1 && byOtherText[0].Id == "B/W02-010",
+                byOtherText.Count.ToString());
+
+            Check("cardref needs at least one box",
+                index.Search(" ", " ", 20).Count == 0);
+            Check("cardref reads no database as empty",
+                CardReferenceIndex.Build((CardDatabase)null, null, null).Count == 0);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
     private static void TestCardEditorEncoding()
     {
         string root = Path.Combine(Path.GetTempPath(),
