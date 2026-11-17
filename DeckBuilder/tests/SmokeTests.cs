@@ -3746,6 +3746,50 @@ internal static class SmokeTests
             Check("altart writer refuses a number CardData already has",
                 !blocked.Success && blocked.Message.Contains("已经有一张"),
                 blocked.Message);
+
+            // Cards whose CardData id carries the parallel E (AW/S18-E101) are
+            // the common case; the written file has to resolve there too.
+            string ePack = Path.Combine(root, "Cards", "测试系列", "S02");
+            Directory.CreateDirectory(ePack);
+            string eCardData = Path.Combine(ePack, "CardData.txt");
+            File.WriteAllText(eCardData,
+                CardDataWriter.BuildBlock(CreateTestDraft("TST/02-E001")),
+                new UTF8Encoding(false));
+
+            var eRequest = new AltArtworkRequest();
+            eRequest.BaseCardId = "TST/02-E001";
+            eRequest.Prefix = "TST/02";
+            eRequest.FolderPath = "测试系列/S02";
+            eRequest.FolderFullPath = ePack;
+            eRequest.FileName = "CardData";
+            eRequest.AlternateArtworkRoot = altRoot;
+            eRequest.AltId = "TST/02-E001b";
+            eRequest.ImageSourcePath = image;
+            AltArtworkResult eSaved = AltArtworkWriter.Save(eRequest);
+            Check("altart writer writes the E form of a card number",
+                eSaved.Success && File.Exists(Path.Combine(altRoot, "02",
+                    "TST_02_E001b.png")), eSaved.Message);
+
+            SeriesFolder eFolder = CreatePackFolder("测试系列/S02", "TST/02",
+                "S02", "测试系列");
+            eFolder.FullPath = ePack;
+            eFolder.Cards.AddRange(CardDataParser.ParseFile(eCardData, eFolder,
+                CommonEffectLibrary.Empty, warnings));
+            ExtraArtworkLoader.Load(eFolder, altRoot, warnings);
+
+            WeissCard eClone = null;
+            for (int i = 0; i < eFolder.Cards.Count; i++)
+            {
+                if (eFolder.Cards[i].IsClone)
+                {
+                    eClone = eFolder.Cards[i];
+                    break;
+                }
+            }
+            Check("altart loader keeps the E form clone id",
+                eClone != null && eClone.Id == "TST/02-E001b" &&
+                eClone.CloneOf != null && eClone.CloneOf.Id == "TST/02-E001",
+                eClone == null ? "none" : eClone.Id);
         }
         finally
         {
