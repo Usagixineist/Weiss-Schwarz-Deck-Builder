@@ -116,8 +116,9 @@ namespace WeissDeckBuilder.UI
 
         /// <summary>
         /// A section label turns white while one of its children is the active
-        /// page. The label itself never draws the selected box, so only one
-        /// entry at a time looks active.
+        /// page. The label only draws the selected box when it is the active
+        /// page itself (its sub entries are folded away then), so exactly one
+        /// entry ever looks active.
         /// </summary>
         private static void SetNavGroupEmphasis(RoundedButton group,
             RoundedButton selected, RoundedButton first, RoundedButton second)
@@ -128,11 +129,12 @@ namespace WeissDeckBuilder.UI
             bool active = ReferenceEquals(selected, group) ||
                 ReferenceEquals(selected, first) ||
                 ReferenceEquals(selected, second);
+            bool box = ReferenceEquals(selected, group);
             Color color = active ? Color.White : AppTheme.TextSoft;
-            if (!group.Selected && group.ForeColor == color)
+            if (group.Selected == box && group.ForeColor == color)
                 return;
 
-            group.Selected = false;
+            group.Selected = box;
             group.ForeColor = color;
             group.Invalidate();
         }

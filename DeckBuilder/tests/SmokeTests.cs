@@ -76,6 +76,8 @@ internal static class SmokeTests
                 db => TestCollectionStore()),
             new TestGroup("cardedit", "编辑卡片：卡块生成、写回与编辑器", false,
                 db => { TestCardEditor(); TestCardEditorPage(); }),
+            new TestGroup("packindex", "添加卡片：卡号定位卡包", false,
+                db => TestCardPackIndex()),
             new TestGroup("launcher", "启动游戏：定位游戏目录与不热更参数", true,
                 db => TestGameLauncher(db))
         };
@@ -275,6 +277,27 @@ internal static class SmokeTests
         }
 
         Check("no empty card names", s18.Cards.All(c => !string.IsNullOrEmpty(c.Name)));
+
+        // 添加卡片 resolves the card pack from the 卡号 alone, so the index has
+        // to find the real folder (and it has to exist on disk).
+        CardPackIndex packs = CardPackIndex.Build(database);
+        Check("pack index covers every card pack", packs.Count > 400,
+            packs.Count.ToString());
+        CardPackTarget awPack = packs.Resolve("AW/S18-E101");
+        Check("pack index resolves AW/S18 to the 加速世界 pack",
+            awPack != null && awPack.SeriesName == "加速世界" &&
+            awPack.Folder.FolderPath.Replace('\\', '/').EndsWith("Accel World/S18",
+                StringComparison.OrdinalIgnoreCase) &&
+            awPack.SetName.Contains("S18"),
+            awPack == null ? "missing" : awPack.Folder.FolderPath + " / " + awPack.SetName);
+        Check("pack index resolves to an existing folder",
+            awPack != null && Directory.Exists(awPack.FolderFullPath),
+            awPack == null ? "missing" : awPack.FolderFullPath);
+
+        IList<CardPackTarget> ksrPacks = packs.Find("KSR/01B-001");
+        Check("pack index keeps a shared promo prefix ambiguous",
+            ksrPacks.Count == 2 && packs.Resolve("KSR/01B-001") == null,
+            ksrPacks.Count.ToString());
         int nonAltWarnings = database.Warnings.Count(w =>
             !w.StartsWith("No card found for alt artwork", StringComparison.Ordinal));
         Check("database parsing produced no folder errors", nonAltWarnings == 0,
@@ -2869,6 +2892,57 @@ internal static class SmokeTests
             Check("cardedit page splits 1/4 + 3/8 + 3/8",
                 HasEditorColumns(page), "body columns not found");
 
+            // 添加卡片 opens without a series: the 卡号 picks the card pack, so
+            // 保存 never asks for one. These checks drive the real text box.
+            var packSeries = new SeriesDefinition("测试系列");
+            SeriesFolder s09 = CreatePackFolder("测试系列/S09", "TST/09", "S09", "测试系列");
+            s09.FullPath = Path.Combine(Path.GetTempPath(), "测试系列", "S09");
+            packSeries.Folders.Add(s09);
+            page.PackIndex = CardPackIndex.Build(
+                new List<SeriesDefinition> { packSeries },
+                delegate(SeriesFolder pack) { return pack.FullPath; });
+
+            CardEditorDraft add = CardEditorDraft.CreateBlank(null, null);
+            page.LoadDraft(add, null);
+            Check("cardedit add opens without a series",
+                !add.HasFolder && page.Draft == add);
+
+            SetEditorText(page, "_idBox", "TST/09-E101");
+            Check("cardedit add picks the pack from the card number",
+                add.HasFolder && add.FolderPath == "测试系列/S09" &&
+                add.SetName == "S09" && add.SeriesName == "测试系列",
+                add.FolderPath + " / " + add.SetName);
+            Check("cardedit add names the pack in the header",
+                page.Subtitle.Contains("S09"), page.Subtitle);
+            Check("cardedit add saves without a second step",
+                page.ReadDraft() != null && page.Draft.HasFolder);
+
+            // A prefix two packs share is offered as chips and still resolves
+            // to the best candidate.
+            SeriesFolder s09Pr = CreatePackFolder("测试系列/PR", "TST/09", "PR", "测试系列");
+            s09Pr.FullPath = Path.Combine(Path.GetTempPath(), "测试系列", "PR");
+            packSeries.Folders.Add(s09Pr);
+            page.PackIndex = CardPackIndex.Build(
+                new List<SeriesDefinition> { packSeries },
+                delegate(SeriesFolder pack) { return pack.FullPath; });
+            SetEditorText(page, "_idBox", "TST/09-E102");
+            FieldInfo choicesField = typeof(CardEditorPage).GetField(
+                "_packChoicesVisible", BindingFlags.Instance | BindingFlags.NonPublic);
+            bool choices = choicesField != null &&
+                (bool)choicesField.GetValue(page);
+            Check("cardedit add offers a shared prefix as chips",
+                choices && add.FolderPath == "测试系列/S09",
+                add.FolderPath + " / chips=" + choices);
+
+            // An unknown prefix has to stop 保存 with a readable reason instead
+            // of writing into the pack picked before.
+            SetEditorText(page, "_idBox", "ZZZ/99-001");
+            CardEditorDraft refused = page.ReadDraft();
+            Check("cardedit add refuses an unknown prefix",
+                refused == null && StatusText(page).Contains("没有匹配的卡包"),
+                StatusText(page));
+            SetEditorText(page, "_idBox", "TST/09-E102");
+
             page.UnloadDraft();
             Check("cardedit page drops the draft", page.Draft == null);
             Check("cardedit page did not close itself", closings == 0,
@@ -3468,6 +3542,154 @@ internal static class SmokeTests
     /// bundled updater never rewrites the card table this app edits. Nothing
     /// here starts a process, so the group is safe to run unattended.
     /// </summary>
+    /// <summary>
+    /// 添加卡片 picks the card pack from the 卡号 alone: the head of the number
+    /// is the `Prefix` line of SingleSetData.txt. Synthetic metadata keeps the
+    /// ranking rules readable and independent of the game folder.
+    /// </summary>
+    private static void TestCardPackIndex()
+    {
+        Check("packindex head of a normal card number",
+            CardPackIndex.CardIdHead("AW/S18-E101") == "AW/S18",
+            CardPackIndex.CardIdHead("AW/S18-E101"));
+        Check("packindex head ignores the rarity suffix",
+            CardPackIndex.CardIdHead("MTI/S83-E055S") == "MTI/S83",
+            CardPackIndex.CardIdHead("MTI/S83-E055S"));
+        Check("packindex head folds case, underscores and spaces",
+            CardPackIndex.CardIdHead(" hol_w104_041 ") == "HOL/W104",
+            CardPackIndex.CardIdHead(" hol_w104_041 "));
+        Check("packindex head keeps a prefix without a set",
+            CardPackIndex.CardIdHead("AW") == "AW",
+            CardPackIndex.CardIdHead("AW"));
+        Check("packindex head of an empty number",
+            CardPackIndex.CardIdHead(null) == string.Empty &&
+            CardPackIndex.CardIdHead("   ") == string.Empty);
+
+        var accel = new SeriesDefinition("加速世界");
+        SeriesFolder awS18 = CreatePackFolder("Accel World/S18", "AW/S18",
+            "加速世界 (S18)", "加速世界");
+        SeriesFolder awPr = CreatePackFolder("Accel World/PR", "AW/S18",
+            "加速世界 PR", "加速世界");
+        accel.Folders.Add(awS18);
+        accel.Folders.Add(awPr);
+
+        var idol = new SeriesDefinition("偶像大师");
+        SeriesFolder iasS93 = CreatePackFolder("Idolmaster/S93/IAS", "IAS/S93",
+            "IAS (S93)", "偶像大师");
+        SeriesFolder iasSe52 = CreatePackFolder("Idolmaster/SE52/IAS", "IAS/S93",
+            "IAS (SE52)", "偶像大师");
+        idol.Folders.Add(iasS93);
+        idol.Folders.Add(iasSe52);
+
+        var daCapo = new SeriesDefinition("初音岛");
+        SeriesFolder dsW46 = CreatePackFolder("DaCapo/DS_W46", "DS/W46",
+            "D.C. (W46)", "初音岛");
+        SeriesFolder dsPr = CreatePackFolder("DaCapo/DS_PR", "DS/W46",
+            "D.C. PR", "初音岛");
+        daCapo.Folders.Add(dsW46);
+        daCapo.Folders.Add(dsPr);
+
+        var kusuriya = new SeriesDefinition("药屋少女");
+        SeriesFolder ksr01 = CreatePackFolder("Apothecary Diaries/KSR01", "KSR/01B",
+            "药屋少女 (01)", "药屋少女");
+        SeriesFolder ksr02 = CreatePackFolder("Kusuriya/01", "KSR/01B",
+            "药屋少女 01", "药屋少女");
+        kusuriya.Folders.Add(ksr01);
+        kusuriya.Folders.Add(ksr02);
+
+        // A card table whose abbreviation differs from the declared prefix:
+        // the set code still points at a single pack.
+        var accelS19 = new SeriesDefinition("加速世界");
+        SeriesFolder awS19 = CreatePackFolder("Accel World/S19", "GAW/S19",
+            "加速世界 (S19)", "加速世界");
+        accelS19.Folders.Add(awS19);
+
+        // The same folder declared by two series must not count twice.
+        var duplicate = new SeriesDefinition("加速世界");
+        duplicate.Folders.Add(awS18);
+
+        var series = new List<SeriesDefinition>
+        {
+            accel, idol, daCapo, kusuriya, accelS19, duplicate
+        };
+        CardPackIndex index = CardPackIndex.Build(series,
+            delegate(SeriesFolder folder) { return "C:\\Cards\\" + folder.FolderPath; });
+
+        Check("packindex counts folders, not prefixes", index.Count == 9,
+            index.Count.ToString());
+        Check("packindex prefers the folder named after the set",
+            SamePackage(index.Resolve("AW/S18-E101"), "Accel World/S18"),
+            DescribePackages(index.Find("AW/S18-E101")));
+        Check("packindex keeps a shared prefix visible",
+            index.Find("AW/S18-E101").Count == 2,
+            DescribePackages(index.Find("AW/S18-E101")));
+        Check("packindex prefers a path segment carrying the set",
+            SamePackage(index.Resolve("IAS/S93-001"), "Idolmaster/S93/IAS"),
+            DescribePackages(index.Find("IAS/S93-001")));
+        Check("packindex prefers the only folder mentioning the set",
+            SamePackage(index.Resolve("DS/W46-001"), "DaCapo/DS_W46"),
+            DescribePackages(index.Find("DS/W46-001")));
+        Check("packindex does not guess between equal candidates",
+            index.Resolve("KSR/01B-001") == null &&
+            index.Find("KSR/01B-001").Count == 2,
+            DescribePackages(index.Find("KSR/01B-001")));
+        Check("packindex falls back to a unique set code",
+            SamePackage(index.Resolve("AW/S19-E001"), "Accel World/S19"),
+            DescribePackages(index.Find("AW/S19-E001")));
+        Check("packindex ignores an unknown prefix",
+            index.Resolve("ZZZ/99-001") == null &&
+            index.Find("ZZZ/99-001").Count == 0,
+            DescribePackages(index.Find("ZZZ/99-001")));
+
+        CardPackTarget writeable = index.Resolve("AW/S18-E101");
+        Check("packindex hands out the folder the writer needs",
+            writeable != null &&
+            writeable.Folder.FullPath == "C:\\Cards\\Accel World/S18",
+            writeable == null ? "missing" : writeable.Folder.FullPath);
+
+        CardPackIndex empty = CardPackIndex.Build(null, null);
+        Check("packindex of a call without metadata is empty",
+            empty.Count == 0 && empty.Find("AW/S18-E101").Count == 0);
+    }
+
+    /// <summary>Card pack folder of a synthetic series, as SingleSetData writes it.</summary>
+    private static SeriesFolder CreatePackFolder(string relativePath, string prefix,
+        string setName, string seriesName)
+    {
+        var folder = new SeriesFolder();
+        folder.SeriesName = seriesName;
+        folder.FolderPath = relativePath;
+        folder.Prefix = prefix;
+        folder.Prefixes.Add(prefix);
+        folder.SetName = setName;
+        folder.FileName = "CardData";
+        return folder;
+    }
+
+    private static bool SamePackage(CardPackTarget target, string relativePath)
+    {
+        return target != null && target.Folder != null &&
+            string.Equals(target.Folder.FolderPath, relativePath,
+                StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string DescribePackages(IList<CardPackTarget> targets)
+    {
+        if (targets == null)
+            return "null";
+        if (targets.Count == 0)
+            return "none";
+
+        var parts = new List<string>();
+        for (int i = 0; i < targets.Count; i++)
+        {
+            parts.Add(targets[i].Folder == null
+                ? "?"
+                : targets[i].Folder.FolderPath);
+        }
+        return string.Join(" | ", parts.ToArray());
+    }
+
     private static void TestGameLauncher(Func<CardDatabase> db)
     {
         string dataRoot = db().DataRoot;

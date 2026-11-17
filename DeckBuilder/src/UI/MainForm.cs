@@ -1305,9 +1305,7 @@ namespace WeissDeckBuilder.UI
             string hint = deckPicker
                 ? "选择系列后浏览卡片"
                 : cardEdit
-                    ? (_cardEditAddPending
-                        ? "选择系列后进入编辑界面"
-                        : "选择系列后编辑卡片")
+                    ? "选择系列后编辑卡片"
                     : "单击封面进入卡片列表";
             if (matches.Count == _database.SeriesNames.Count)
             {
@@ -1444,12 +1442,15 @@ namespace WeissDeckBuilder.UI
                 SetNavExpanded(false);
                 SetDeckSubItemsVisible(false);
                 ShowContentPage(_browsePage);
+                // The card list of 写卡 folds its sub entries away (see above),
+                // so the section label carries the highlight there: a hidden
+                // sub entry cannot show the selected box.
                 SetActiveNavItem(deckPicker
                     ? _navDeckButton
                     : collection
                         ? _navCollectionButton
                         : cardEdit
-                            ? _navCardEditModifyButton
+                            ? _navCardEditButton
                             : _navSeriesButton);
                 ScheduleDarkChrome();
 
@@ -1481,9 +1482,6 @@ namespace WeissDeckBuilder.UI
                 RunSearch();
                 UpdateNewDeckStripVisibility();
                 UpdateCollectionChrome();
-
-                if (cardEdit)
-                    OnCardEditSeriesOpened(series);
             }
             catch (Exception ex)
             {

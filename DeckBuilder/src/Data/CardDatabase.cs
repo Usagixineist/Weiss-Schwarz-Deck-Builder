@@ -61,6 +61,31 @@ namespace WeissDeckBuilder.Data
         }
 
         /// <summary>
+        /// Full path of a card pack folder. The folder metadata only keeps the
+        /// relative FolderPath from SingleSetData.txt until its series is
+        /// opened; 添加卡片 needs the path before that, because the new card is
+        /// written straight into the pack's CardData.txt.
+        /// </summary>
+        public string GetFolderFullPath(SeriesFolder folder)
+        {
+            if (folder == null)
+                return string.Empty;
+
+            if (!string.IsNullOrEmpty(folder.FullPath) &&
+                Directory.Exists(folder.FullPath))
+            {
+                return folder.FullPath;
+            }
+
+            string relative = (folder.FolderPath ?? string.Empty)
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Replace('\\', Path.DirectorySeparatorChar);
+            return string.IsNullOrEmpty(relative)
+                ? string.Empty
+                : Path.Combine(_cardsRoot, relative);
+        }
+
+        /// <summary>
         /// Re-reads every SingleSetData.txt after a card pack was installed.
         /// Cached lookups (series names, warnings, previously loaded series)
         /// are dropped so the new series shows up without restarting the app.

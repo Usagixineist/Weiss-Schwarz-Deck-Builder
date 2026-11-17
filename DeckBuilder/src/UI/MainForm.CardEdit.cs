@@ -22,20 +22,12 @@ namespace WeissDeckBuilder.UI
         private CardEditorPage _cardEditorPage;
 
         /// <summary>
-        /// The card list the 取消 button returns to: the series whose cards are
-        /// being edited. Null when 添加卡片 was started from the cover grid, in
-        /// which case 取消 goes back to the covers.
+        /// The card list the 取消 button returns to. 修改卡片 sets it to the
+        /// series of the card that was opened; 添加卡片 sets it only when a
+        /// series was already open (its packs are the fallback when the 卡号
+        /// names none). Null means 取消 returns to the series covers.
         /// </summary>
         private SeriesDefinition _cardEditorReturnSeries;
-
-        /// <summary>True when 取消 returns to 添加卡片 rather than 修改卡片.</summary>
-        private bool _cardEditorReturnNew;
-
-        /// <summary>
-        /// 添加卡片 was clicked without an open series: the next cover click
-        /// lands in the editor instead of the plain card list.
-        /// </summary>
-        private bool _cardEditAddPending;
 
         private bool IsCardEditSection
         {
@@ -69,32 +61,23 @@ namespace WeissDeckBuilder.UI
         /// <summary>修改卡片: the series cover grid of 系列卡表.</summary>
         private void ShowCardEdit()
         {
-            ShowCardEditHome(false);
+            ShowCardEditHome();
         }
 
         /// <summary>
-        /// 添加卡片: with a series already open the editor starts right away;
-        /// otherwise the cover grid picks the series and the click lands in the
-        /// editor (see <see cref="OnCardEditSeriesOpened"/>).
+        /// 添加卡片: the 卡号 decides which card pack the new block is written
+        /// to, so the editor opens right away instead of asking for a series
+        /// first. The series that happens to be open only serves as a fallback
+        /// for a 卡号 whose prefix the card tables do not know, and as the page
+        /// 取消 returns to.
         /// </summary>
         private void ShowCardAdd()
         {
-            if (_activeSeries != null && IsCardEditSection)
-            {
-                SetNavSubItemsVisible(NavSection.CardEdit);
-                SetActiveNavItem(_navCardEditAddButton);
-                _contentTitle.Text = "添加卡片";
-                _cardEditAddPending = false;
-                ShowCardAddEditor(_activeSeries);
-                return;
-            }
-
-            ShowCardEditHome(true);
+            ShowCardAddEditor(IsCardEditSection ? _activeSeries : null);
         }
 
-        private void ShowCardEditHome(bool addMode)
+        private void ShowCardEditHome()
         {
-            _cardEditAddPending = addMode;
             _viewMode = ViewMode.CardEditList;
             _activeSeries = null;
             _results.Clear();
@@ -108,17 +91,14 @@ namespace WeissDeckBuilder.UI
             SetNavExpanded(true);
             SetNavSubItemsVisible(NavSection.CardEdit);
             ShowContentPage(_browsePage);
-            SetActiveNavItem(addMode
-                ? _navCardEditAddButton
-                : _navCardEditModifyButton);
+            SetActiveNavItem(_navCardEditModifyButton);
             UpdateNewDeckStripVisibility();
 
             _backButton.Text = "←  系列列表";
-            _contentTitle.Text = addMode ? "添加卡片" : "修改卡片";
+            _contentTitle.Text = "修改卡片";
             _contentSubtitle.Text = string.Format(
-                "共 {0} 个系列 · {1}",
-                _database.SeriesNames.Count,
-                addMode ? "选择系列后进入编辑界面" : "选择系列后编辑卡片");
+                "共 {0} 个系列 · 选择系列后编辑卡片",
+                _database.SeriesNames.Count);
 
             _tileGrid.EmptyText = "没有找到系列";
             _tileGrid.ConfigureSeries();
@@ -127,30 +107,6 @@ namespace WeissDeckBuilder.UI
             ExitCollectionMarkMode();
             UpdateCollectionChrome();
             ScheduleDarkChrome();
-        }
-
-        /// <summary>
-        /// Called at the end of <see cref="OpenSeries"/> for the 编辑卡片
-        /// section. 添加卡片 continues into the editor; 修改卡片 just keeps the
-        /// card list, whose clicks open the editor.
-        /// </summary>
-        private void OnCardEditSeriesOpened(SeriesDefinition series)
-        {
-            bool add = _cardEditAddPending;
-            _cardEditAddPending = false;
-            _contentTitle.Text = add ? "添加卡片" : "修改卡片";
-
-            if (!add || series == null)
-                return;
-
-            if (!IsHandleCreated)
-            {
-                ShowCardAddEditor(series);
-                return;
-            }
-
-            // Let the card list finish laying out before the editor replaces it.
-            BeginInvoke((Action)delegate { ShowCardAddEditor(series); });
         }
 
         private void ShowCardEditor(WeissCard card)
@@ -166,27 +122,35 @@ namespace WeissDeckBuilder.UI
             ShowCardEditorPage(draft, null, _activeSeries);
         }
 
+        /// <summary>
+        /// Opens an empty editor. <paramref name="series"/> may be null: the
+        /// editor then starts without a series, and the 卡号 fills in the card
+        /// pack while the player types (see CardEditorPage.UpdatePackTarget).
+        /// </summary>
         private void ShowCardAddEditor(SeriesDefinition series)
         {
-            if (series == null)
-                return;
+            SeriesDefinition loaded = null;
+            IList<SeriesFolder> folders = null;
+            SeriesFolder folder = null;
 
-            SeriesDefinition loaded = _database.GetSeries(series.Name);
-            if (loaded == null)
+            if (series != null)
             {
-                _statusLabel.Text = "系列未找到：" + series.Name;
-                return;
+                loaded = _database.GetSeries(series.Name);
+                if (loaded != null)
+                {
+                    _activeSeries = loaded;
+                    folders = loaded.Folders;
+
+                    // A single pack leaves no choice, so it is prefilled; a
+                    // multi-pack series waits for the 卡号 to pick one.
+                    if (loaded.Folders.Count == 1)
+                        folder = loaded.Folders[0];
+                }
             }
 
-            _activeSeries = loaded;
-            SeriesFolder folder = loaded.Folders.Count > 0
-                ? loaded.Folders[0]
-                : null;
-
             CardEditorDraft draft = CardEditorDraft.CreateBlank(loaded, folder);
-            draft.SeriesName = loaded.Name;
             draft.PreviewImagePath = string.Empty;
-            ShowCardEditorPage(draft, loaded.Folders, loaded);
+            ShowCardEditorPage(draft, folders, loaded);
         }
 
         /// <summary>
@@ -230,6 +194,7 @@ namespace WeissDeckBuilder.UI
             _cardEditorPage.CloseRequested += CardEditorPage_CloseRequested;
             _cardEditorPage.SaveRequested += CardEditorPage_SaveRequested;
             _cardEditorPage.Visible = false;
+            _cardEditorPage.TargetChanged += CardEditorPage_TargetChanged;
             _contentHost.Controls.Add(_cardEditorPage);
         }
 
@@ -242,7 +207,6 @@ namespace WeissDeckBuilder.UI
             EnsureCardEditorPage();
             _viewMode = ViewMode.CardEditor;
             _cardEditorReturnSeries = series;
-            _cardEditorReturnNew = draft.IsNew;
 
             // The editor needs the width: the filter column (250px) belongs to
             // the card list and folds away while the page is open.
@@ -268,18 +232,30 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
+        /// The editor resolves 系列 / 卡包 from the 卡号 while the player types;
+        /// the header above the page mirrors it, so both always name the pack
+        /// 保存 writes into.
+        /// </summary>
+        private void CardEditorPage_TargetChanged(object sender, EventArgs e)
+        {
+            if (_cardEditorPage == null || _cardEditorPage.Draft == null)
+                return;
+
+            _contentSubtitle.Text = _cardEditorPage.Subtitle;
+        }
+
+        /// <summary>
         /// 取消: back to the card list the editor was opened from, or to the
         /// cover grid when there is no series to return to.
         /// </summary>
         private void CancelCardEditor()
         {
             bool hasSeries = _cardEditorReturnSeries != null && _activeSeries != null;
-            bool wasNew = _cardEditorReturnNew;
             CloseCardEditor();
 
             if (!hasSeries)
             {
-                ShowCardEditHome(wasNew);
+                ShowCardEditHome();
                 return;
             }
 
@@ -288,11 +264,12 @@ namespace WeissDeckBuilder.UI
             _filterColumnStyle.Width = 250F;
             _filterHost.Visible = true;
             SetNavExpanded(false);
-            SetActiveNavItem(wasNew
-                ? _navCardEditAddButton
-                : _navCardEditModifyButton);
+            // The card list is the working page of 写卡, where its sub entries
+            // fold away: the section label carries the highlight then.
+            SetNavSubItemsVisible(NavSection.None);
+            SetActiveNavItem(_navCardEditButton);
             _backButton.Text = "←  选择系列";
-            _contentTitle.Text = wasNew ? "添加卡片" : "修改卡片";
+            _contentTitle.Text = "修改卡片";
             ShowContentPage(_browsePage);
             if (_tileGrid != null && _tileGrid.CanFocus)
                 _tileGrid.Focus();

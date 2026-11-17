@@ -334,21 +334,9 @@ namespace WeissDeckBuilder.Data
         private static string ResolveFolderFullPath(CardDatabase database,
             SeriesFolder folder)
         {
-            if (folder == null)
-                return string.Empty;
-
-            if (!string.IsNullOrEmpty(folder.FullPath) &&
-                Directory.Exists(folder.FullPath))
-            {
-                return folder.FullPath;
-            }
-
-            string relative = (folder.FolderPath ?? string.Empty)
-                .Replace('/', Path.DirectorySeparatorChar)
-                .Replace('\\', Path.DirectorySeparatorChar);
-            return string.IsNullOrEmpty(relative)
+            return database == null
                 ? string.Empty
-                : Path.Combine(database.CardsRoot, relative);
+                : database.GetFolderFullPath(folder);
         }
 
         private static CommonEffectLibrary LoadCommonEffects(string dataRoot)

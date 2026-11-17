@@ -98,11 +98,39 @@ namespace WeissDeckBuilder.UI
         private CardEditorDraft _draft;
         private IList<SeriesFolder> _folders;
 
+        /// <summary>卡号 -> 卡包 lookup used by 添加卡片, built on demand.</summary>
+        private CardPackIndex _packIndex;
+
+        /// <summary>True while the 卡包 chips of the page are shown.</summary>
+        private bool _packChoicesVisible;
+
+        /// <summary>Hint appended to the header while no pack was resolved.</summary>
+        private string _packHint;
+
+        /// <summary>True while the fields are filled, so typing does not resolve.</summary>
+        private bool _loadingDraft;
+
         public event EventHandler CloseRequested;
         public event EventHandler SaveRequested;
 
+        /// <summary>
+        /// Raised when the card number picked a different card pack, so
+        /// MainForm can mirror the header line above the page.
+        /// </summary>
+        public event EventHandler TargetChanged;
+
         /// <summary>Card table the reference search reads; null disables it.</summary>
         public CardDatabase Database { get; set; }
+
+        /// <summary>
+        /// 卡号 -> 卡包 lookup of 添加卡片. The page builds it from
+        /// <see cref="Database"/> on demand; tests inject a synthetic one.
+        /// </summary>
+        public CardPackIndex PackIndex
+        {
+            get { return _packIndex; }
+            set { _packIndex = value; }
+        }
 
         /// <summary>
         /// Thumbnail cache handed to the reference grid. MainForm assigns it
@@ -124,6 +152,15 @@ namespace WeissDeckBuilder.UI
         public CardEditorDraft Draft
         {
             get { return _draft; }
+        }
+
+        /// <summary>
+        /// Header line of the page (系列 · 卡包 · 卡号). MainForm mirrors it above
+        /// the page whenever the card number picks another pack.
+        /// </summary>
+        public string Subtitle
+        {
+            get { return _subtitleLabel == null ? string.Empty : _subtitleLabel.Text; }
         }
 
         public CardEditorPage()
@@ -157,6 +194,8 @@ namespace WeissDeckBuilder.UI
             };
 
             BuildPage();
+            if (_idBox != null && _idBox.Input != null)
+                _idBox.Input.TextChanged += IdBox_TextChanged;
         }
 
         private static Font CreateFont(float size, FontStyle style)
@@ -191,12 +230,21 @@ namespace WeissDeckBuilder.UI
 
             _draft = draft;
             _folders = folders;
-            LoadDraftFields(draft);
+            _loadingDraft = true;
+            try
+            {
+                LoadDraftFields(draft);
+            }
+            finally
+            {
+                _loadingDraft = false;
+            }
+
             ResetReference();
             EnsureReferenceIndex();
 
             SetStatus(draft.IsNew
-                ? "填写卡号与卡名，把卡图拖进左上角的框，然后保存"
+                ? "卡号决定写入哪个卡包：填好卡号与卡名，把卡图拖进左上角的框，然后保存"
                 : "修改后点保存：只改写改动过的行，其它卡、注释与简写保持原样（先备份 .bak）",
                 false);
 
@@ -237,6 +285,7 @@ namespace WeissDeckBuilder.UI
         public void InvalidateReference()
         {
             _referenceIndex = null;
+            _packIndex = null;
             _folderImages.Clear();
             _referenceSelection = null;
             ShowReferenceGrid();
@@ -483,6 +532,7 @@ namespace WeissDeckBuilder.UI
             AddFieldCell(_infoContent, 0, 3, "联动 (Combo)", out _comboBox, true);
 
             _folderRow = CreateChipRow(true);
+            _folderRow.SelectionChanged += FolderRow_SelectionChanged;
             _folderCell = WrapChips("卡包（新卡写入的位置）", _folderRow);
             _infoContent.Controls.Add(_folderCell, 0, 4);
             _infoContent.SetColumnSpan(_folderCell, 2);
@@ -836,8 +886,6 @@ namespace WeissDeckBuilder.UI
         private void LoadDraftFields(CardEditorDraft draft)
         {
             _titleLabel.Text = draft.IsNew ? "添加卡片" : "修改卡片";
-            _subtitleLabel.Text = draft.TargetLabel +
-                (string.IsNullOrEmpty(draft.Id) ? string.Empty : " · " + draft.Id);
 
             _idBox.Text = draft.Id ?? string.Empty;
             _nameBox.Text = draft.Name ?? string.Empty;
@@ -862,28 +910,146 @@ namespace WeissDeckBuilder.UI
             _colorRow.Select(draft.Color);
             _powerBox.Input.Enabled = draft.Category == CardCategory.Character;
 
-            LoadFolderChips(draft);
+            UpdatePackTarget();
             ShowPreview(draft.PreviewImagePath);
+            _subtitleLabel.Text = BuildSubtitle();
         }
 
-        private void LoadFolderChips(CardEditorDraft draft)
+        /// <summary>
+        /// Fills 卡包 from the 卡号: 添加卡片 opens without a series, and the
+        /// head of the number (AW/S18 for AW/S18-E101) names the pack the new
+        /// block has to be written to. A prefix several packs declare (promo
+        /// folders) is offered as chips; a prefix that matches nothing keeps
+        /// the packs of the series the editor was opened from.
+        /// </summary>
+        private void UpdatePackTarget()
         {
-            _folderRow.ClearChips();
-            bool show = draft.IsNew && _folders != null && _folders.Count > 1;
-            if (show)
+            CardEditorDraft draft = _draft;
+            if (draft == null || _folderRow == null)
+                return;
+
+            if (!draft.IsNew)
             {
-                for (int i = 0; i < _folders.Count; i++)
-                {
-                    SeriesFolder folder = _folders[i];
-                    string label = string.IsNullOrEmpty(folder.SetName)
-                        ? folder.FolderPath
-                        : folder.SetName;
-                    _folderRow.AddChip(label, folder);
-                }
-                _folderRow.Select(FindFolder(draft.FolderPath));
+                _packHint = null;
+                _folderRow.ClearChips();
+                SetFolderRowVisible(false);
+                RefreshHeader();
+                return;
             }
 
-            SetFolderRowVisible(show);
+            string id = _idBox.Text.Trim();
+            CardPackIndex index = id.Length == 0 ? null : EnsurePackIndex();
+            IList<CardPackTarget> targets = index == null ? null : index.Find(id);
+
+            if (targets != null && targets.Count > 0)
+            {
+                CardPackTarget chosen = index.Resolve(id);
+                if (chosen == null)
+                    chosen = targets[0];
+
+                _packHint = null;
+                _folderRow.ClearChips();
+                if (targets.Count == 1)
+                {
+                    SetFolderRowVisible(false);
+                }
+                else
+                {
+                    for (int i = 0; i < targets.Count; i++)
+                        _folderRow.AddChip(targets[i].DisplayLabel, targets[i]);
+                    _folderRow.Select(chosen);
+                    SetFolderRowVisible(true);
+                }
+
+                ApplyPackTarget(draft, chosen);
+                RefreshHeader();
+                return;
+            }
+
+            bool hasSeriesChoice = _folders != null && _folders.Count > 1;
+            _packHint = id.Length == 0
+                ? (hasSeriesChoice
+                    ? "选择卡包，或输入卡号自动分配"
+                    : (draft.HasFolder ? null : "输入卡号后自动分配卡包"))
+                : "卡号前缀 " + CardPackIndex.CardIdHead(id) + " 没有匹配的卡包";
+
+            if (_folders != null && _folders.Count > 0)
+                ShowSeriesFolders(draft);
+            else
+                ClearPackTarget(draft);
+
+            RefreshHeader();
+        }
+
+        /// <summary>
+        /// Drops the pack of a draft whose 卡号 names none, so 保存 refuses with
+        /// a reason instead of writing into the pack picked before.
+        /// </summary>
+        private void ClearPackTarget(CardEditorDraft draft)
+        {
+            _folderRow.ClearChips();
+            SetFolderRowVisible(false);
+            draft.SeriesName = string.Empty;
+            draft.FolderPath = string.Empty;
+            draft.FolderFullPath = string.Empty;
+            draft.FileName = "CardData";
+            draft.SetName = string.Empty;
+        }
+
+        /// <summary>
+        /// Falls back to the packs of the series the editor was opened from.
+        /// A blank 添加卡片 opened from the sidebar has nothing to fall back to.
+        /// </summary>
+        private void ShowSeriesFolders(CardEditorDraft draft)
+        {
+            _folderRow.ClearChips();
+            if (_folders == null || _folders.Count == 0)
+            {
+                SetFolderRowVisible(false);
+                return;
+            }
+
+            for (int i = 0; i < _folders.Count; i++)
+                _folderRow.AddChip(_folders[i].ToString(), _folders[i]);
+
+            SeriesFolder current = FindFolder(draft.FolderPath);
+            if (current == null)
+                current = _folders[0];
+            _folderRow.Select(current);
+            SetFolderRowVisible(_folders.Count > 1);
+            CardEditorDraft.UseFolder(draft, current);
+        }
+
+        /// <summary>Points the draft at the pack a chip or the card number picked.</summary>
+        private void ApplyPackTarget(CardEditorDraft draft, CardPackTarget target)
+        {
+            if (draft == null || target == null || target.Folder == null)
+                return;
+
+            if (string.IsNullOrEmpty(target.Folder.FullPath))
+                target.Folder.FullPath = target.FolderFullPath;
+            CardEditorDraft.UseFolder(draft, target.Folder);
+        }
+
+        /// <summary>Applies the chip the player clicked, whichever kind it holds.</summary>
+        private void ApplyPackChoice()
+        {
+            if (_draft == null || _folderRow == null)
+                return;
+
+            if (_folderRow.SelectedValue is CardPackTarget)
+                ApplyPackTarget(_draft, (CardPackTarget)_folderRow.SelectedValue);
+            else if (_folderRow.SelectedValue is SeriesFolder)
+                CardEditorDraft.UseFolder(_draft, (SeriesFolder)_folderRow.SelectedValue);
+        }
+
+        private void FolderRow_SelectionChanged(object sender, EventArgs e)
+        {
+            if (_draft == null)
+                return;
+
+            ApplyPackChoice();
+            RefreshHeader();
         }
 
         private SeriesFolder FindFolder(string folderPath)
@@ -904,6 +1070,7 @@ namespace WeissDeckBuilder.UI
 
         private void SetFolderRowVisible(bool visible)
         {
+            _packChoicesVisible = visible;
             if (_folderCell != null)
                 _folderCell.Visible = visible;
 
@@ -915,6 +1082,51 @@ namespace WeissDeckBuilder.UI
 
             if (_infoScroll != null)
                 _infoScroll.PerformLayout();
+        }
+
+        /// <summary>Card pack lookup of 添加卡片, built from the card tables once.</summary>
+        private CardPackIndex EnsurePackIndex()
+        {
+            if (_packIndex == null && Database != null)
+                _packIndex = CardPackIndex.Build(Database);
+            return _packIndex;
+        }
+
+        /// <summary>
+        /// Typing a 卡号 picks the 卡包 (and with it the series) right away, so
+        /// the header and the chips always describe where 保存 will write.
+        /// </summary>
+        private void IdBox_TextChanged(object sender, EventArgs e)
+        {
+            if (_loadingDraft || _draft == null || !_draft.IsNew)
+                return;
+
+            UpdatePackTarget();
+        }
+
+        private void RefreshHeader()
+        {
+            if (_subtitleLabel != null)
+                _subtitleLabel.Text = BuildSubtitle();
+
+            EventHandler handler = TargetChanged;
+            if (handler != null)
+                handler(this, EventArgs.Empty);
+        }
+
+        /// <summary>Header line: 系列 · 卡包 · 卡号, plus the hint while unresolved.</summary>
+        private string BuildSubtitle()
+        {
+            if (_draft == null)
+                return string.Empty;
+
+            string id = _draft.IsNew ? _idBox.Text.Trim() : _draft.Id;
+            string text = _draft.TargetLabel;
+            if (!string.IsNullOrEmpty(id))
+                text += " · " + id;
+            if (string.IsNullOrEmpty(_packHint))
+                return text;
+            return text + " · " + _packHint;
         }
 
         private void ShowPreview(string path)
@@ -1058,13 +1270,30 @@ namespace WeissDeckBuilder.UI
             if (draft.Category != CardCategory.Character)
                 draft.Power = 0;
 
-            if (_folderRow.Visible && _folderRow.SelectedValue is SeriesFolder)
+            if (draft.IsNew)
             {
-                CardEditorDraft.UseFolder(draft,
-                    (SeriesFolder)_folderRow.SelectedValue);
-                _subtitleLabel.Text = draft.TargetLabel + " · " + draft.Id;
+                // The chips hold either the packs the card number resolved to
+                // or the packs of the series the editor was opened from; the
+                // click already updated the draft, this keeps the last state.
+                if (_packChoicesVisible)
+                    ApplyPackChoice();
+                else
+                    UpdatePackTarget();
+
+                if (!draft.HasFolder)
+                {
+                    string head = CardPackIndex.CardIdHead(id);
+                    SetStatus(head.Length == 0
+                        ? "卡号不能为空"
+                        : "卡号前缀 " + head +
+                            " 没有匹配的卡包，请检查卡号（例如 AW/S18-E101）",
+                        true);
+                    _idBox.Input.Focus();
+                    return null;
+                }
             }
 
+            _subtitleLabel.Text = BuildSubtitle();
             return draft;
         }
 
