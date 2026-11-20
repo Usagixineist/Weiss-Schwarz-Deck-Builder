@@ -97,6 +97,90 @@ namespace WeissDeckBuilder.Data
     /// is touched: a variant exists through its image alone, and the clone the
     /// loader builds carries the base card's fields.
     /// </summary>
+    /// <summary>
+    /// Outcome of a whole 添加异画 queue: one <see cref="AltArtworkResult"/> per
+    /// image, so the page can drop the rows that were written and keep the ones
+    /// that were refused together with the reason.
+    /// </summary>
+    public sealed class AltArtBatchResult
+    {
+        /// <summary>One result per request, in the order they were sent.</summary>
+        public IList<AltArtworkResult> Results { get; private set; }
+
+        public int SavedCount { get; private set; }
+        public int FailedCount { get; private set; }
+
+        /// <summary>Footer line naming what happened and why.</summary>
+        public string Message { get; private set; }
+
+        private AltArtBatchResult()
+        {
+            Results = new List<AltArtworkResult>();
+            Message = string.Empty;
+        }
+
+        public static AltArtBatchResult From(IList<AltArtworkResult> results)
+        {
+            var batch = new AltArtBatchResult();
+            var all = new List<AltArtworkResult>();
+            if (results != null)
+            {
+                for (int i = 0; i < results.Count; i++)
+                {
+                    AltArtworkResult one = results[i];
+                    if (one == null)
+                        one = AltArtworkResult.Fail("没有可保存的异画。");
+
+                    all.Add(one);
+                    if (one.Success)
+                        batch.SavedCount++;
+                    else
+                        batch.FailedCount++;
+                }
+            }
+
+            batch.Results = all;
+            batch.Message = BuildMessage(all, batch.SavedCount, batch.FailedCount);
+            return batch;
+        }
+
+        private static string BuildMessage(IList<AltArtworkResult> results,
+            int saved, int failed)
+        {
+            if (results.Count == 0)
+                return "没有待保存的异画。";
+
+            // One image keeps the writer's own sentence, which names the file
+            // and the card number the game will show.
+            if (results.Count == 1)
+                return results[0].Message;
+
+            string firstFailure = null;
+            var ids = new List<string>();
+            for (int i = 0; i < results.Count; i++)
+            {
+                if (!results[i].Success)
+                {
+                    if (firstFailure == null)
+                        firstFailure = results[i].Message;
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(results[i].AltId))
+                    ids.Add(results[i].AltId);
+            }
+
+            if (saved == 0)
+                return "这 " + results.Count + " 张都没保存：" + firstFailure;
+
+            string message = "已保存 " + saved + " 张异画：" +
+                string.Join("、", ids.ToArray());
+            if (failed > 0)
+                message += "；" + failed + " 张失败：" + firstFailure;
+            return message;
+        }
+    }
+
     public static class AltArtworkWriter
     {
         /// <summary>
@@ -106,6 +190,17 @@ namespace WeissDeckBuilder.Data
         public static string SuggestAltId(string baseCardId, string prefix,
             string folderPath, string alternateArtworkRoot)
         {
+            return SuggestAltId(baseCardId, prefix, folderPath,
+                alternateArtworkRoot, null);
+        }
+
+        /// <summary>
+        /// Same, also skipping the letters the page has already handed out to
+        /// the rest of the queue, so a multi image drop gets a、b、c.
+        /// </summary>
+        public static string SuggestAltId(string baseCardId, string prefix,
+            string folderPath, string alternateArtworkRoot, ISet<char> reserved)
+        {
             string baseId = (baseCardId ?? string.Empty).Trim();
             if (baseId.Length == 0)
                 return string.Empty;
@@ -113,7 +208,7 @@ namespace WeissDeckBuilder.Data
             string directory = ResolveDirectory(prefix, folderPath,
                 alternateArtworkRoot);
             char suffix = AltArtworkNaming.SuggestSuffix(directory,
-                AltArtworkNaming.GetFileBasePrefix(baseId));
+                AltArtworkNaming.GetFileBasePrefix(baseId), reserved);
             return baseId + suffix;
         }
 
@@ -237,6 +332,22 @@ namespace WeissDeckBuilder.Data
                 "异画已写入 " + shown + "，游戏里显示为 " + canonicalId +
                 "（" + baseId + " 的异画）",
                 destination, canonicalId);
+        }
+
+        /// <summary>
+        /// Writes a whole 添加异画 queue. One refused row does not stop the
+        /// batch: every image is answered on its own, so the page can keep the
+        /// rows that failed and leave the ones that were written out of it.
+        /// </summary>
+        public static AltArtBatchResult SaveAll(IList<AltArtworkRequest> requests)
+        {
+            var results = new List<AltArtworkResult>();
+            if (requests != null)
+            {
+                for (int i = 0; i < requests.Count; i++)
+                    results.Add(Save(requests[i]));
+            }
+            return AltArtBatchResult.From(results);
         }
 
         /// <summary>

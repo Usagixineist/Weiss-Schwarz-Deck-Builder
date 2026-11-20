@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.IO;
 using System.Text;
+using WeissDeckBuilder.Models;
 
 namespace WeissDeckBuilder.Data
 {
@@ -69,14 +70,14 @@ namespace WeissDeckBuilder.Data
         private const int PdfCardPixelWidth = 744;
         private const int PdfCardPixelHeight = 1039;
 
-        private static readonly Color BackgroundTop = Color.FromArgb(31, 41, 55);
-        private static readonly Color BackgroundBottom = Color.FromArgb(15, 23, 42);
-        private static readonly Color TileFill = Color.FromArgb(30, 41, 59);
-        private static readonly Color DividerColor = Color.FromArgb(45, 57, 75);
-        private static readonly Color BorderColor = Color.FromArgb(51, 65, 85);
-        private static readonly Color TextColor = Color.FromArgb(241, 245, 249);
-        private static readonly Color TextSoftColor = Color.FromArgb(203, 213, 225);
-        private static readonly Color TextMutedColor = Color.FromArgb(148, 163, 184);
+        private static Color BackgroundTop { get { return AppPalette.Current.Navigation; } }
+        private static Color BackgroundBottom { get { return AppPalette.Current.MainBackground; } }
+        private static Color TileFill { get { return AppPalette.Current.TileBackground; } }
+        private static Color DividerColor { get { return AppPalette.Current.Divider; } }
+        private static Color BorderColor { get { return AppPalette.Current.Border; } }
+        private static Color TextColor { get { return AppPalette.Current.Text; } }
+        private static Color TextSoftColor { get { return AppPalette.Current.TextSoft; } }
+        private static Color TextMutedColor { get { return AppPalette.Current.TextMuted; } }
         private static readonly Color AccentColor = Color.FromArgb(59, 130, 246);
 
         /// <summary>

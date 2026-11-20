@@ -405,7 +405,7 @@ namespace WeissDeckBuilder.UI
 
             // The dark halo keeps the accent circle readable on bright
             // artwork, where the plain fill used to blend into the illustration.
-            using (var halo = new SolidBrush(Color.FromArgb(140, 3, 8, 18)))
+            using (var halo = new SolidBrush(Color.FromArgb(140, AppTheme.Scrim)))
                 graphics.FillEllipse(halo, Rectangle.Inflate(badge, 2, 2));
 
             using (var fill = new SolidBrush(AppTheme.Accent))

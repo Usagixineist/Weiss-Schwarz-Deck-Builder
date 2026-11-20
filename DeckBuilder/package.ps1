@@ -152,7 +152,7 @@ finally {
     $archive.Dispose()
 }
 
-$forbidden = @('data-root.txt', '.bak-', '/build/', 'test-results.txt', '.log')
+$forbidden = @('data-root.txt', 'settings.txt', '.bak-', '/build/', 'test-results.txt', '.log')
 if (-not $IncludeSource) {
     $forbidden += '/tests/'
 }

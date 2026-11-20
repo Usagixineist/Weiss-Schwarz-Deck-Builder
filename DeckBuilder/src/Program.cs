@@ -13,6 +13,7 @@ namespace WeissDeckBuilder
         {
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
+            LoadProfiler.Initialize(args);
             Application.ThreadException += delegate(object sender,
                 System.Threading.ThreadExceptionEventArgs e)
             {
@@ -38,8 +39,15 @@ namespace WeissDeckBuilder
 
             try
             {
-                CardDatabase database = CardDatabase.Load(dataRoot);
-                Application.Run(new MainForm(database));
+                CardDatabase database;
+                using (LoadProfiler.Measure("Startup", "CardDatabase.Load"))
+                    database = CardDatabase.Load(dataRoot);
+
+                MainForm form;
+                using (LoadProfiler.Measure("Startup", "MainForm ctor"))
+                    form = new MainForm(database);
+
+                Application.Run(form);
             }
             catch (Exception ex)
             {

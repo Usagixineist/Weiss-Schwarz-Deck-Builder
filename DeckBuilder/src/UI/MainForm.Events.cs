@@ -152,6 +152,7 @@ namespace WeissDeckBuilder.UI
             _cardDetailOverlay = new CardDetailOverlay(_detailThumbnails);
             _cardDetailOverlay.NameResolver = ResolveCardsByName;
             _cardDetailOverlay.CardNavigation = GetAdjacentDetailCard;
+            _cardDetailOverlay.Glossary = _triggerGlossary;
             _cardDetailOverlay.Dock = DockStyle.Fill;
             _cardDetailOverlay.CloseRequested +=
                 CardDetailOverlay_CloseRequested;
@@ -490,7 +491,8 @@ namespace WeissDeckBuilder.UI
             try
             {
                 SearchQuery query = BuildQuery();
-                _results = _searchService.Search(_activeSeries, query);
+                using (LoadProfiler.Measure("RunSearch", "Search"))
+                    _results = _searchService.Search(_activeSeries, query);
 
                 // On the collection card list the grid also carries the owned
                 // count: coloured tiles with a red sticker for cards the player
@@ -498,30 +500,34 @@ namespace WeissDeckBuilder.UI
                 bool collection = _viewMode == ViewMode.CollectionCards;
                 bool onlyOwned = collection && IsOnlyOwnedChecked;
                 var items = new List<TileGridItem>();
-                for (int i = 0; i < _results.Count; i++)
+                using (LoadProfiler.Measure("RunSearch", "BuildItems"))
                 {
-                    WeissCard card = _results[i];
-                    int owned = collection ? GetCollectionCount(card) : 0;
-                    if (onlyOwned && owned <= 0)
-                        continue;
+                    for (int i = 0; i < _results.Count; i++)
+                    {
+                        WeissCard card = _results[i];
+                        int owned = collection ? GetCollectionCount(card) : 0;
+                        if (onlyOwned && owned <= 0)
+                            continue;
 
-                    string title = string.IsNullOrEmpty(card.JapaneseName)
-                        ? card.Name
-                        : card.JapaneseName;
-                    var item = new TileGridItem();
-                    item.Title = title;
-                    item.Subtitle = card.Id;
-                    item.ImagePath = card.ImagePath;
-                    item.OwnedCount = owned;
-                    item.Dimmed = collection && owned <= 0;
-                    item.Tag = card;
-                    items.Add(item);
+                        string title = string.IsNullOrEmpty(card.JapaneseName)
+                            ? card.Name
+                            : card.JapaneseName;
+                        var item = new TileGridItem();
+                        item.Title = title;
+                        item.Subtitle = card.Id;
+                        item.ImagePath = card.ImagePath;
+                        item.OwnedCount = owned;
+                        item.Dimmed = collection && owned <= 0;
+                        item.Tag = card;
+                        items.Add(item);
+                    }
                 }
 
                 _tileGrid.EmptyText = onlyOwned
                     ? "没有拥有的卡片"
                     : "没有找到卡片";
-                _tileGrid.SetItems(items);
+                using (LoadProfiler.Measure("RunSearch", "SetItems"))
+                    _tileGrid.SetItems(items);
                 ScheduleDarkChrome();
 
                 string summary = string.Format("找到 {0} 张 · 卡池 {1} 张",

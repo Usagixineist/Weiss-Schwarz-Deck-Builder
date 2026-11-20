@@ -9,34 +9,21 @@ namespace WeissDeckBuilder.UI
 {
     /// <summary>
     /// 编辑卡片 (写卡): 修改卡片 browses a series exactly like 系列卡表 and
-    /// opens the editor page on a click, 添加卡片 starts a blank card, and
-    /// 添加异画 opens the same editor for a picked card with its right-hand
-    /// 添加异画 block ready. The editor is a normal page of the content host
-    /// (not a popup) and saving goes through <see cref="CardDataWriter"/>, which
-    /// rewrites the lines the editor owns in the card pack's CardData.txt and
-    /// keeps a .bak next to it; an 异画 is written by
-    /// <see cref="AltArtworkWriter"/> into StreamingAssets\AlternateArtwork.
+    /// opens the editor page on a click, 添加卡片 starts a blank card. 添加异画
+    /// has no entry of its own any more: the block sits in the editor of every
+    /// existing card, so a variant is added right where the card is edited.
+    /// The editor is a normal page of the content host (not a popup) and saving
+    /// goes through <see cref="CardDataWriter"/>, which rewrites the lines the
+    /// editor owns in the card pack's CardData.txt and keeps a .bak next to it;
+    /// an 异画 is written by <see cref="AltArtworkWriter"/> into
+    /// StreamingAssets\AlternateArtwork.
     /// </summary>
     public sealed partial class MainForm
     {
-        /// <summary>Which sub entry of 写卡 the card list belongs to.</summary>
-        private enum CardEditIntent
-        {
-            /// <summary>修改卡片: a click opens the editor of that card.</summary>
-            Modify,
-
-            /// <summary>添加异画: a click opens the editor on its 添加异画 block.</summary>
-            AltArt
-        }
-
         private RoundedButton _navCardEditButton;
         private RoundedButton _navCardEditModifyButton;
         private RoundedButton _navCardEditAddButton;
-        private RoundedButton _navCardEditAltButton;
         private CardEditorPage _cardEditorPage;
-
-        /// <summary>Sub entry the card list was opened from (see <see cref="CardEditIntent"/>).</summary>
-        private CardEditIntent _cardEditIntent;
 
         /// <summary>
         /// Base card the open editor writes an 异画 for: the card itself, or the
@@ -75,9 +62,7 @@ namespace WeissDeckBuilder.UI
 
         private void NavCardEditModifyButton_Click(object sender, EventArgs e)
         {
-            // 添加异画 shares the series picker and the card list, so the
-            // 修改卡片 entry has to take those pages back when it is clicked.
-            if (!IsCardEditSection || _cardEditIntent != CardEditIntent.Modify)
+            if (!IsCardEditSection)
                 ShowCardEdit();
         }
 
@@ -86,25 +71,10 @@ namespace WeissDeckBuilder.UI
             ShowCardAdd();
         }
 
-        private void NavCardEditAltButton_Click(object sender, EventArgs e)
-        {
-            ShowCardAltArt();
-        }
-
         /// <summary>修改卡片: the series cover grid of 系列卡表.</summary>
         private void ShowCardEdit()
         {
-            ShowCardEditHome(CardEditIntent.Modify);
-        }
-
-        /// <summary>
-        /// 添加异画: pick a series, then a card; the editor opens with the
-        /// 添加异画 block on the right so the variant number and its art can be
-        /// filled in without leaving the card.
-        /// </summary>
-        private void ShowCardAltArt()
-        {
-            ShowCardEditHome(CardEditIntent.AltArt);
+            ShowCardEditHome();
         }
 
         /// <summary>
@@ -116,13 +86,11 @@ namespace WeissDeckBuilder.UI
         /// </summary>
         private void ShowCardAdd()
         {
-            _cardEditIntent = CardEditIntent.Modify;
             ShowCardAddEditor(IsCardEditSection ? _activeSeries : null);
         }
 
-        private void ShowCardEditHome(CardEditIntent intent)
+        private void ShowCardEditHome()
         {
-            _cardEditIntent = intent;
             _viewMode = ViewMode.CardEditList;
             _activeSeries = null;
             _results.Clear();
@@ -136,19 +104,13 @@ namespace WeissDeckBuilder.UI
             SetNavExpanded(true);
             SetNavSubItemsVisible(NavSection.CardEdit);
             ShowContentPage(_browsePage);
-            SetActiveNavItem(intent == CardEditIntent.AltArt
-                ? _navCardEditAltButton
-                : _navCardEditModifyButton);
+            SetActiveNavItem(_navCardEditModifyButton);
             UpdateNewDeckStripVisibility();
 
             _backButton.Text = "←  系列列表";
-            _contentTitle.Text = intent == CardEditIntent.AltArt
-                ? "添加异画"
-                : "修改卡片";
+            _contentTitle.Text = "修改卡片";
             _contentSubtitle.Text = string.Format(
-                intent == CardEditIntent.AltArt
-                    ? "共 {0} 个系列 · 选择系列后挑一张卡加异画"
-                    : "共 {0} 个系列 · 选择系列后编辑卡片",
+                "共 {0} 个系列 · 选择系列后编辑卡片",
                 _database.SeriesNames.Count);
 
             _tileGrid.EmptyText = "没有找到系列";
@@ -252,6 +214,7 @@ namespace WeissDeckBuilder.UI
             _cardEditorPage.Dock = DockStyle.Fill;
             _cardEditorPage.Database = _database;
             _cardEditorPage.Thumbnails = _thumbnails;
+            _cardEditorPage.Glossary = _triggerGlossary;
             _cardEditorPage.CloseRequested += CardEditorPage_CloseRequested;
             _cardEditorPage.SaveRequested += CardEditorPage_SaveRequested;
             _cardEditorPage.AltArtSaveRequested += CardEditorPage_AltArtSaveRequested;
@@ -283,20 +246,14 @@ namespace WeissDeckBuilder.UI
             _filterHost.Visible = false;
             SetNavExpanded(false);
             SetNavSubItemsVisible(NavSection.CardEdit);
-            bool altArt = !draft.IsNew &&
-                _cardEditIntent == CardEditIntent.AltArt;
             SetActiveNavItem(draft.IsNew
                 ? _navCardEditAddButton
-                : altArt ? _navCardEditAltButton : _navCardEditModifyButton);
+                : _navCardEditModifyButton);
 
-            _contentTitle.Text = draft.IsNew
-                ? "添加卡片"
-                : altArt ? "添加异画" : "修改卡片";
+            _contentTitle.Text = draft.IsNew ? "添加卡片" : "修改卡片";
             _contentSubtitle.Text = draft.TargetLabel;
             ShowContentPage(_cardEditorPage);
             _cardEditorPage.LoadDraft(draft, folders);
-            if (altArt)
-                _cardEditorPage.FocusAltArtSection();
             ScheduleDarkChrome();
         }
 
@@ -333,7 +290,7 @@ namespace WeissDeckBuilder.UI
 
             if (!hasSeries)
             {
-                ShowCardEditHome(_cardEditIntent);
+                ShowCardEditHome();
                 return;
             }
 
@@ -359,9 +316,7 @@ namespace WeissDeckBuilder.UI
             SetNavSubItemsVisible(NavSection.None);
             SetActiveNavItem(_navCardEditButton);
             _backButton.Text = "←  选择系列";
-            _contentTitle.Text = _cardEditIntent == CardEditIntent.AltArt
-                ? "添加异画"
-                : "修改卡片";
+            _contentTitle.Text = "修改卡片";
             ShowContentPage(_browsePage);
             if (_tileGrid != null && _tileGrid.CanFocus)
                 _tileGrid.Focus();
@@ -425,33 +380,34 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
-        /// 保存异画: writes the picked image into StreamingAssets\AlternateArtwork
-        /// through <see cref="AltArtworkWriter"/> and keeps the editor open, so
-        /// several variants of one card can be added in a row. The card list is
-        /// reloaded when the editor closes.
+        /// 保存异画: writes every queued image into
+        /// StreamingAssets\AlternateArtwork through <see cref="AltArtworkWriter"/>
+        /// and keeps the editor open with the refused rows still in the queue,
+        /// so one bad number does not throw away the rest of the batch. The
+        /// card list is reloaded when the editor closes.
         /// </summary>
         private void CardEditorPage_AltArtSaveRequested(object sender, EventArgs e)
         {
             if (_cardEditorPage == null)
                 return;
 
-            AltArtworkRequest request = _cardEditorPage.ReadAltArt();
-            if (request == null)
+            IList<AltArtworkRequest> requests = _cardEditorPage.ReadAltArts();
+            if (requests == null)
                 return;
 
             Cursor previousCursor = Cursor;
             Cursor = Cursors.WaitCursor;
-            AltArtworkResult result;
+            AltArtBatchResult result;
             try
             {
-                result = AltArtworkWriter.Save(request);
+                result = AltArtworkWriter.SaveAll(requests);
             }
             finally
             {
                 Cursor = previousCursor;
             }
 
-            if (!result.Success)
+            if (result.SavedCount == 0)
             {
                 _cardEditorPage.SetStatus(result.Message, true);
                 _cardEditorPage.SetAltArtStatus(result.Message, true);
@@ -460,7 +416,7 @@ namespace WeissDeckBuilder.UI
 
             _cardAltArtWritten = true;
             _contentSubtitle.Text = _cardEditorPage.Subtitle;
-            _cardEditorPage.NotifyAltArtSaved(result.Message);
+            _cardEditorPage.NotifyAltArtsSaved(result);
         }
 
         private void ReloadAfterCardSave(string seriesName, CardWriteResult result)

@@ -15,31 +15,50 @@ namespace WeissDeckBuilder.Data
             if (string.IsNullOrEmpty(folderPath) || !Directory.Exists(folderPath))
                 return index;
 
-            for (int i = 0; i < Extensions.Length; i++)
+            string[] files;
+            try
             {
-                string[] files;
-                try
-                {
-                    files = Directory.GetFiles(folderPath, "*" + Extensions[i]);
-                }
-                catch (IOException)
-                {
-                    continue;
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    continue;
-                }
+                // One enumeration for the whole folder: asking for *.png, *.jpg,
+                // *.jpeg and *.webp separately walked the same directory four
+                // times, which showed up as ~20 ms while opening a series.
+                files = Directory.GetFiles(folderPath);
+            }
+            catch (IOException)
+            {
+                return index;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return index;
+            }
 
-                for (int j = 0; j < files.Length; j++)
-                {
-                    string fileName = Path.GetFileName(files[j]);
-                    index[fileName] = files[j];
-                    index[Path.GetFileNameWithoutExtension(fileName)] = files[j];
-                }
+            for (int j = 0; j < files.Length; j++)
+            {
+                string fileName = Path.GetFileName(files[j]);
+                if (!IsImageExtension(Path.GetExtension(fileName)))
+                    continue;
+
+                index[fileName] = files[j];
+                index[Path.GetFileNameWithoutExtension(fileName)] = files[j];
             }
 
             return index;
+        }
+
+        private static bool IsImageExtension(string extension)
+        {
+            if (string.IsNullOrEmpty(extension))
+                return false;
+
+            for (int i = 0; i < Extensions.Length; i++)
+            {
+                if (string.Equals(extension, Extensions[i],
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            return false;
         }
 
         public static void Resolve(WeissCard card, IDictionary<string, string> imageIndex)

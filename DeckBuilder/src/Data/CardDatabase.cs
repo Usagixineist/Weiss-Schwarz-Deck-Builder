@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using WeissDeckBuilder.Infrastructure;
 using WeissDeckBuilder.Models;
 using WeissDeckBuilder.Search;
 
@@ -163,7 +164,9 @@ namespace WeissDeckBuilder.Data
                 if (series.CardsLoaded)
                     return series;
 
-                LoadSeriesCards(series);
+                using (LoadProfiler.Measure("GetSeries",
+                    "load " + series.Name))
+                    LoadSeriesCards(series);
                 return series;
             }
         }
@@ -251,16 +254,46 @@ namespace WeissDeckBuilder.Data
                 cardFilePath = Path.Combine(folderPath, "CardData.txt");
             }
 
-            List<WeissCard> cards = CardDataParser.ParseFile(
-                cardFilePath, folder, _commonEffects, _warnings);
-            folder.Cards.AddRange(cards);
-            NameDataLoader.Apply(folder, folderPath);
-            ExtraArtworkLoader.Load(folder, _alternateArtworkRoot, _warnings);
-            NameDataLoader.Apply(folder, folderPath);
+            string label = string.IsNullOrEmpty(folder.SetName)
+                ? folder.FolderPath
+                : folder.SetName;
 
-            var imageIndex = ImageLocator.BuildIndex(folderPath);
-            for (int i = 0; i < folder.Cards.Count; i++)
-                ImageLocator.Resolve(folder.Cards[i], imageIndex);
+            List<WeissCard> cards;
+            using (LoadProfiler.Measure("LoadFolder", "parse " + label))
+            {
+                cards = CardDataParser.ParseFile(
+                    cardFilePath, folder, _commonEffects, _warnings);
+            }
+
+            folder.Cards.AddRange(cards);
+
+            // JPNames.txt / NameData.txt are read once and applied twice: the
+            // parsed cards get their name first, because an extra rarity copies
+            // the name of its base card, and the appended clones then get a
+            // lookup of their own. Reading both files for each pass was the
+            // duplicate work on the way into a series; the loops are cheap.
+            Dictionary<string, string> names;
+            int parsedCount = folder.Cards.Count;
+            using (LoadProfiler.Measure("LoadFolder", "names " + label))
+            {
+                names = NameDataLoader.LoadNames(folderPath);
+                NameDataLoader.ApplyTo(folder.Cards, 0, parsedCount, names);
+            }
+
+            using (LoadProfiler.Measure("LoadFolder", "extra art " + label))
+                ExtraArtworkLoader.Load(folder, _alternateArtworkRoot, _warnings);
+
+            using (LoadProfiler.Measure("LoadFolder", "names alt art " + label))
+                NameDataLoader.ApplyTo(folder.Cards, 0, folder.Cards.Count, names);
+
+            Dictionary<string, string> imageIndex;
+            using (LoadProfiler.Measure("LoadFolder", "image index " + label))
+                imageIndex = ImageLocator.BuildIndex(folderPath);
+            using (LoadProfiler.Measure("LoadFolder", "image resolve " + label))
+            {
+                for (int i = 0; i < folder.Cards.Count; i++)
+                    ImageLocator.Resolve(folder.Cards[i], imageIndex);
+            }
         }
 
         private string ResolveFolderPath(string relativePath)

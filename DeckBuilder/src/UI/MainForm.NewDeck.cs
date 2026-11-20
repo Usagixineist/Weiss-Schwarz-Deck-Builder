@@ -109,6 +109,7 @@ namespace WeissDeckBuilder.UI
             _newDeckStrip.Dock = DockStyle.Fill;
             _newDeckStrip.Margin = new Padding(0, NewDeckStripTopGap, 0, 0);
             _newDeckStrip.Thumbnails = _thumbnails;
+            _newDeckStrip.Glossary = _triggerGlossary;
             _newDeckStrip.ImagePathProvider = delegate(string code)
             {
                 string path;

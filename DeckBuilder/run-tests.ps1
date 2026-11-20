@@ -50,6 +50,8 @@ $sourceFiles += Get-ChildItem -LiteralPath (Join-Path $src 'Models') -Filter '*.
 $sourceFiles += Get-ChildItem -LiteralPath (Join-Path $src 'Data') -Filter '*.cs' -File
 $sourceFiles += Get-ChildItem -LiteralPath (Join-Path $src 'Search') -Filter '*.cs' -File
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'Infrastructure\DataPathResolver.cs')
+# 打开系列的分段计时（-profile）就住在这里；TileGridControl / ThumbnailCache 引用它。
+$sourceFiles += Get-Item -LiteralPath (Join-Path $src 'Infrastructure\LoadProfiler.cs')
 # 启动游戏 walks up from the data folder to the exe and passes `noUpdate`; the
 # lookup and the argument are pure enough to check headlessly.
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'Infrastructure\GameLauncher.cs')

@@ -37,6 +37,7 @@ namespace WeissDeckBuilder.Data
         private readonly int[] _colorTotals;
         private readonly int[,] _colorByCategory;
         private readonly int[] _levelTotals;
+        private readonly int[] _triggerTotals;
 
         public DeckStatistics()
         {
@@ -44,6 +45,7 @@ namespace WeissDeckBuilder.Data
             _colorTotals = new int[MatrixColors.Length];
             _colorByCategory = new int[MatrixColors.Length, MatrixCategories.Length];
             _levelTotals = new int[MaxLevel + 1];
+            _triggerTotals = new int[(int)TriggerIcon.CustomIcon6 + 1];
         }
 
         /// <summary>Cards that were resolved, i.e. the 合计 of the matrix.</summary>
@@ -53,10 +55,46 @@ namespace WeissDeckBuilder.Data
         public int Unresolved { get; private set; }
 
         /// <summary>Cards whose trigger icon is 魂.</summary>
-        public int SoulTriggerCards { get; private set; }
+        public int SoulTriggerCards
+        {
+            get { return GetTriggerTotal(TriggerIcon.Soul); }
+        }
 
         /// <summary>Cards whose trigger icon is 2魂.</summary>
-        public int DoubleSoulTriggerCards { get; private set; }
+        public int DoubleSoulTriggerCards
+        {
+            get { return GetTriggerTotal(TriggerIcon.DoubleSoul); }
+        }
+
+        /// <summary>
+        /// Cards carrying one trigger icon. The 卡组信息 table lists every
+        /// trigger the deck uses, so the counts are kept for all of them and
+        /// not only for 魂 / 2魂.
+        /// </summary>
+        public int GetTriggerTotal(TriggerIcon trigger)
+        {
+            int index = (int)trigger;
+            return index < 0 || index >= _triggerTotals.Length
+                ? 0
+                : _triggerTotals[index];
+        }
+
+        /// <summary>
+        /// Trigger icons the deck actually uses, in <see cref="TriggerIcon"/>
+        /// order. Icons no card carries stay out, matching the 0 张不显示 rule
+        /// of the colour matrix.
+        /// </summary>
+        public IList<TriggerIcon> GetTriggersInUse()
+        {
+            var triggers = new List<TriggerIcon>();
+            for (int i = 0; i < _triggerTotals.Length; i++)
+            {
+                if (_triggerTotals[i] > 0)
+                    triggers.Add((TriggerIcon)i);
+            }
+
+            return triggers;
+        }
 
         public int GetCategoryTotal(CardCategory category)
         {
@@ -122,10 +160,12 @@ namespace WeissDeckBuilder.Data
                 _levelTotals[card.Level]++;
             }
 
-            if (card.Trigger == TriggerIcon.Soul)
-                SoulTriggerCards++;
-            else if (card.Trigger == TriggerIcon.DoubleSoul)
-                DoubleSoulTriggerCards++;
+            if (card.Trigger != TriggerIcon.None)
+            {
+                int triggerIndex = (int)card.Trigger;
+                if (triggerIndex > 0 && triggerIndex < _triggerTotals.Length)
+                    _triggerTotals[triggerIndex]++;
+            }
         }
 
         /// <summary>

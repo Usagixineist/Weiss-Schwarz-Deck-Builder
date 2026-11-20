@@ -4,7 +4,9 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
+using System.Globalization;
 using System.Windows.Forms;
+using WeissDeckBuilder.Infrastructure;
 
 namespace WeissDeckBuilder.UI
 {
@@ -86,7 +88,7 @@ namespace WeissDeckBuilder.UI
     /// Owner-drawn, scrollable tile grid. It only decodes thumbnails for the
     /// visible row range, which keeps the 199-series overview responsive.
     /// </summary>
-    public sealed class TileGridControl : ScrollableControl
+    public sealed class TileGridControl : ScrollableControl, IThemeAware
     {
         private const int CaptionGap = 6;
         private const int TitleAreaHeight = 36;
@@ -111,11 +113,11 @@ namespace WeissDeckBuilder.UI
         private readonly StringFormat _centeredFormat;
         private readonly StringFormat _titleFormat;
         private readonly StringFormat _subtitleFormat;
-        private readonly SolidBrush _titleBrush;
-        private readonly SolidBrush _subtitleBrush;
-        private readonly SolidBrush _placeholderBrush;
-        private readonly SolidBrush _dimTitleBrush;
-        private readonly SolidBrush _dimSubtitleBrush;
+        private SolidBrush _titleBrush;
+        private SolidBrush _subtitleBrush;
+        private SolidBrush _placeholderBrush;
+        private SolidBrush _dimTitleBrush;
+        private SolidBrush _dimSubtitleBrush;
         private readonly Font _ownedCountFont;
         private readonly Font _ownedCountSmallFont;
 
@@ -128,7 +130,7 @@ namespace WeissDeckBuilder.UI
 
         /// <summary>Wash that dims an unowned illustration after the grey pass.</summary>
         private static readonly Color DimVeilColor =
-            Color.FromArgb(78, 15, 23, 42);
+            Color.FromArgb(78, AppTheme.Scrim);
 
         /// <summary>
         /// Greyscale matrix of an unowned tile: luminance weights halved so the
@@ -154,6 +156,13 @@ namespace WeissDeckBuilder.UI
         private bool _recalculating;
         private int _contentHeight;
         private int _pageViewportHeight;
+
+        /// <summary>
+        /// Timestamp taken by SetItems, consumed by the first paint afterwards
+        /// so the -profile log can tell how long the new list stayed invisible.
+        /// Always 0 unless <see cref="LoadProfiler"/> is enabled.
+        /// </summary>
+        private long _itemsSetMark;
 
         // Long press stands in for "show details" on the 编辑卡组 card grid,
         // where a plain left click adds the card to the new deck instead.
@@ -299,11 +308,7 @@ namespace WeissDeckBuilder.UI
             _subtitleFormat.Alignment = StringAlignment.Center;
             _subtitleFormat.LineAlignment = StringAlignment.Near;
             _subtitleFormat.Trimming = StringTrimming.None;
-            _titleBrush = new SolidBrush(AppTheme.Text);
-            _subtitleBrush = new SolidBrush(AppTheme.TextMuted);
-            _placeholderBrush = new SolidBrush(AppTheme.Placeholder);
-            _dimTitleBrush = new SolidBrush(AppTheme.TextMuted);
-            _dimSubtitleBrush = new SolidBrush(AppTheme.Placeholder);
+            CreateBrushes();
             _ownedCountFont = new Font("Microsoft YaHei UI", 10F,
                 FontStyle.Bold, GraphicsUnit.Point, 134);
             _ownedCountSmallFont = new Font("Microsoft YaHei UI", 7.5F,
@@ -319,6 +324,31 @@ namespace WeissDeckBuilder.UI
 
             ConfigureSeries();
         }
+
+        /// <summary>
+        /// Tile labels reuse their brushes on every paint, so a palette swap has
+        /// to rebuild them from the new colours.
+        /// </summary>
+        public void ApplyTheme()
+        {
+            _titleBrush.Dispose();
+            _subtitleBrush.Dispose();
+            _placeholderBrush.Dispose();
+            _dimTitleBrush.Dispose();
+            _dimSubtitleBrush.Dispose();
+            CreateBrushes();
+            Invalidate();
+        }
+
+        private void CreateBrushes()
+        {
+            _titleBrush = new SolidBrush(AppTheme.Text);
+            _subtitleBrush = new SolidBrush(AppTheme.TextMuted);
+            _placeholderBrush = new SolidBrush(AppTheme.Placeholder);
+            _dimTitleBrush = new SolidBrush(AppTheme.TextMuted);
+            _dimSubtitleBrush = new SolidBrush(AppTheme.Placeholder);
+        }
+
 
         public IList<TileGridItem> Items
         {
@@ -405,6 +435,7 @@ namespace WeissDeckBuilder.UI
             _longPressFired = false;
             RecalculateLayout();
             ScrollToTop();
+            _itemsSetMark = LoadProfiler.Mark();
             Invalidate();
         }
 
@@ -554,57 +585,110 @@ namespace WeissDeckBuilder.UI
 
         protected override void OnPaint(PaintEventArgs e)
         {
-            base.OnPaint(e);
-            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            long paintMark = LoadProfiler.Mark();
+            ThumbnailCache thumbnails = Thumbnails;
+            long decodeMark = thumbnails == null ? 0L : thumbnails.DecodeCount;
+            double decodeMsMark = thumbnails == null
+                ? 0.0
+                : thumbnails.DecodeMilliseconds;
+            int tiles = 0;
 
-            using (var background = new SolidBrush(BackColor))
-                e.Graphics.FillRectangle(background, ClientRectangle);
-
-            if (_items.Count == 0)
-            {
-                DrawEmptyState(e.Graphics);
-                return;
-            }
-
-            int viewportTop = -AutoScrollPosition.Y;
-            int viewportBottom = viewportTop + ClientSize.Height;
-            if (ExpandToContent)
-            {
-                // The hosting page scrolls, so only the rows inside the page
-                // viewport are painted (and only their thumbnails decode).
-                Rectangle band = GetVisibleBand();
-                if (band.Height <= 0 || band.Width <= 0)
-                    return;
-
-                viewportTop = band.Top;
-                viewportBottom = band.Bottom;
-            }
-
-            GraphicsState state = e.Graphics.Save();
-            e.Graphics.TranslateTransform(
-                AutoScrollPosition.X, AutoScrollPosition.Y);
+            // The whole frame is wrapped so a -profile log line is written even
+            // when the empty state or the visible band ends the paint early.
             try
             {
-                for (int row = 0; row < _rows; row++)
-                {
-                    if (_rowTops[row] + _rowHeights[row] < viewportTop)
-                        continue;
-                    if (_rowTops[row] > viewportBottom)
-                        break;
+                base.OnPaint(e);
+                e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
 
-                    for (int column = 0; column < _columns; column++)
+                using (var background = new SolidBrush(BackColor))
+                    e.Graphics.FillRectangle(background, ClientRectangle);
+
+                if (_items.Count == 0)
+                {
+                    DrawEmptyState(e.Graphics);
+                    return;
+                }
+
+                int viewportTop = -AutoScrollPosition.Y;
+                int viewportBottom = viewportTop + ClientSize.Height;
+                if (ExpandToContent)
+                {
+                    // The hosting page scrolls, so only the rows inside the page
+                    // viewport are painted (and only their thumbnails decode).
+                    Rectangle band = GetVisibleBand();
+                    if (band.Height <= 0 || band.Width <= 0)
+                        return;
+
+                    viewportTop = band.Top;
+                    viewportBottom = band.Bottom;
+                }
+
+                GraphicsState state = e.Graphics.Save();
+                e.Graphics.TranslateTransform(
+                    AutoScrollPosition.X, AutoScrollPosition.Y);
+                try
+                {
+                    for (int row = 0; row < _rows; row++)
                     {
-                        int index = row * _columns + column;
-                        if (index >= _items.Count)
+                        if (_rowTops[row] + _rowHeights[row] < viewportTop)
+                            continue;
+                        if (_rowTops[row] > viewportBottom)
                             break;
-                        DrawTile(e.Graphics, index, GetItemRectangle(index));
+
+                        for (int column = 0; column < _columns; column++)
+                        {
+                            int index = row * _columns + column;
+                            if (index >= _items.Count)
+                                break;
+                            DrawTile(e.Graphics, index, GetItemRectangle(index));
+                            tiles++;
+                        }
                     }
+                }
+                finally
+                {
+                    e.Graphics.Restore(state);
                 }
             }
             finally
             {
-                e.Graphics.Restore(state);
+                ReportPaint(paintMark, thumbnails, decodeMark, decodeMsMark,
+                    tiles);
             }
+        }
+
+        /// <summary>
+        /// Writes one -profile line per paint: the frame time, how many tiles it
+        /// drew and how much of that went into decoding thumbnails. The first
+        /// paint after <see cref="SetItems"/> additionally reports the delay the
+        /// player sees before the new card list appears. No-op without -profile.
+        /// </summary>
+        private void ReportPaint(long paintMark, ThumbnailCache thumbnails,
+            long decodeMark, double decodeMsMark, int tiles)
+        {
+            if (!LoadProfiler.Enabled)
+                return;
+
+            string extra = "tiles " + tiles;
+            if (thumbnails != null)
+            {
+                extra += ", decodes " +
+                    (thumbnails.DecodeCount - decodeMark) + " (" +
+                    (thumbnails.DecodeMilliseconds - decodeMsMark).ToString(
+                        "0.0", CultureInfo.InvariantCulture) + " ms)";
+            }
+
+            if (_itemsSetMark != 0L)
+            {
+                LoadProfiler.Note("TileGrid", "first paint after SetItems",
+                    _itemsSetMark, extra);
+                _itemsSetMark = 0L;
+            }
+
+            // Hover moves repaint the whole viewport, so only frames that took
+            // noticeable time are worth a line of their own.
+            if (LoadProfiler.Since(paintMark) >= 8.0)
+                LoadProfiler.Note("TileGrid", "paint", paintMark, extra);
         }
 
         /// <summary>
@@ -766,7 +850,7 @@ namespace WeissDeckBuilder.UI
 
             // Same dark halo as the deck count badge, so the red circle stays
             // readable on bright illustration backgrounds.
-            using (var halo = new SolidBrush(Color.FromArgb(140, 3, 8, 18)))
+            using (var halo = new SolidBrush(Color.FromArgb(140, AppTheme.Scrim)))
                 graphics.FillEllipse(halo, Rectangle.Inflate(badge, 2, 2));
 
             using (var fill = new SolidBrush(OwnedBadgeColor))

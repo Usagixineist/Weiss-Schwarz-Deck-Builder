@@ -1,0 +1,21 @@
+# 界面设置：设置页里的每一项改动都写在这个文件里。
+# 格式：[分类] 下面一行一个 键=值，# 开头为注释。
+# 删掉本文件即恢复全部默认设置。
+
+[appearance]
+theme=dark
+
+[terminology]
+DoubleSoul=爆
+Book=书
+Wind=风
+Bag=袋
+Door=门
+Gate=裤
+Shot=火
+Bar=砖
+Standby=电
+Choice=Y
+Telescope=镜
+LightBulb=灯
+Focus=橘

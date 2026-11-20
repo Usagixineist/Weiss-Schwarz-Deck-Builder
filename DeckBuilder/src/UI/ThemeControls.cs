@@ -245,8 +245,10 @@ namespace WeissDeckBuilder.UI
             Color textColor = !Enabled
                 ? AppTheme.Placeholder
                 : _hover || _pressed
-                    ? Color.White
-                    : ForeColor;
+                    ? AppTheme.ForegroundOn(fill)
+                    : Selected
+                        ? AppTheme.ForegroundOn(fill)
+                        : ForeColor;
 
             TextRenderer.DrawText(e.Graphics, Text, Font, textBounds,
                 textColor, flags);
@@ -441,6 +443,27 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
+        /// Moves <see cref="Content"/> so <paramref name="offset"/> sits at the
+        /// top of the viewport. The settings page uses it to jump to the
+        /// section of the sidebar entry that was clicked; a value past the last
+        /// full page clamps to <see cref="ScrollToBottom"/> territory, so a
+        /// section near the bottom still ends up on screen.
+        /// </summary>
+        public void ScrollTo(int offset)
+        {
+            SetOffset(offset);
+        }
+
+        /// <summary>
+        /// Shows the end of <see cref="Content"/>. A row added at the bottom of
+        /// a long list would otherwise be created out of sight.
+        /// </summary>
+        public void ScrollToBottom()
+        {
+            SetOffset(MaxOffset);
+        }
+
+        /// <summary>
         /// Moves the content by one wheel notch. Returns false when the host has
         /// nothing to scroll, so the caller can let the gesture travel on.
         /// </summary>
@@ -512,14 +535,14 @@ namespace WeissDeckBuilder.UI
 
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
             Rectangle track = GetTrackBounds();
-            using (var trackBrush = new SolidBrush(Color.FromArgb(22, 31, 46)))
+            using (var trackBrush = new SolidBrush(AppTheme.InputBackground))
                 e.Graphics.FillRectangle(trackBrush, track);
 
             _thumbBounds = GetThumbBounds(track);
             using (GraphicsPath path =
                 AppTheme.CreateRoundedRectangle(_thumbBounds, 4))
             using (var thumbBrush = new SolidBrush(
-                _dragging ? AppTheme.TextMuted : Color.FromArgb(71, 85, 105)))
+                _dragging ? AppTheme.TextMuted : AppTheme.Border))
             {
                 e.Graphics.FillPath(thumbBrush, path);
             }
@@ -810,9 +833,9 @@ namespace WeissDeckBuilder.UI
             IsActive = false;
             SurfaceColor = Color.Empty;
             NormalColor = Color.Transparent;
-            HoverColor = Color.FromArgb(55, 65, 81);
-            PressedColor = Color.FromArgb(75, 85, 99);
-            ActiveColor = Color.FromArgb(45, 57, 75);
+            HoverColor = AppTheme.Divider;
+            PressedColor = AppTheme.Border;
+            ActiveColor = AppTheme.Divider;
             BackColor = Color.Transparent;
             ForeColor = AppTheme.TextSoft;
             FlatStyle = FlatStyle.Flat;
@@ -886,7 +909,7 @@ namespace WeissDeckBuilder.UI
             Color iconColor = !Enabled
                 ? AppTheme.Placeholder
                 : _hover || _pressed || IsActive
-                    ? Color.White
+                    ? AppTheme.ForegroundOn(fill)
                     : AppTheme.TextSoft;
 
             Rectangle iconBounds = bounds;

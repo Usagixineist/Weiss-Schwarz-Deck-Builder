@@ -342,6 +342,35 @@ namespace WeissDeckBuilder.UI
             Invalidate();
         }
 
+        /// <summary>
+        /// Chinese names of the triggers, forwarded to the 卡组信息 tables so the
+        /// strip and the deck sidebar always agree.
+        /// </summary>
+        public TriggerGlossary Glossary
+        {
+            get { return _statsPanel == null ? null : _statsPanel.Glossary; }
+            set
+            {
+                if (_statsPanel == null)
+                    return;
+
+                _statsPanel.Glossary = value;
+                Invalidate();
+            }
+        }
+
+        /// <summary>
+        /// Repaints the tables after the shared glossary was edited in place.
+        /// </summary>
+        public void RefreshTriggerNames()
+        {
+            if (_statsPanel == null)
+                return;
+
+            _statsPanel.RefreshNames();
+            Invalidate();
+        }
+
 
         /// <summary>Height of one card image of the compact row.</summary>
         private int CardHeight

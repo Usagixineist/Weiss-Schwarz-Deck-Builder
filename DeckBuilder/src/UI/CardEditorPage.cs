@@ -30,14 +30,98 @@ namespace WeissDeckBuilder.UI
         private const int SearchRowHeight = 48;
         private const int SearchResultLimit = 120;
 
+        /// <summary>Height of the ＋ 添加效果 / 移除最后一条 strip.</summary>
+        private const int EffectToolbarHeight = 34;
+
+        /// <summary>Height of one 效果 row when the card has more than one.</summary>
+        private const int EffectRowHeight = 320;
+
+        /// <summary>Gap kept between two 效果 rows.</summary>
+        private const int EffectRowGap = 8;
+
+        /// <summary>
+        /// Vertical padding a <see cref="FieldBox"/> keeps around its input
+        /// (twice its inner 8px), so the 简写提供 box can be measured to exactly
+        /// the lines it shows instead of guessing a fixed height.
+        /// </summary>
+        private const int FieldBoxInnerPadding = 16;
+
+        /// <summary>Width a vertical scrollbar of a multiline
+        /// <see cref="FieldBox"/> takes from its text.</summary>
+        private const int FieldBoxScrollbarWidth = 18;
+
+        /// <summary>Width the 效果 column keeps free for its own scrollbar.</summary>
+        private const int EffectScrollbarReserve = 10;
+
+        /// <summary>
+        /// Right margin the caption / box stacks of an 效果 row keep, so the
+        /// text of a row never touches the scrollbar column.
+        /// </summary>
+        private const int EffectRowRightMargin = 8;
+
+        /// <summary>
+        /// Caption of the read-only 简写提供 band. It gets its own caption row
+        /// above the box, exactly like the 内容 / 代码 captions, so the box
+        /// below spans the whole 效果 column.
+        /// </summary>
+        private const string InheritedLabel = "简写提供（只读）";
+
+        /// <summary>Gap the 简写提供 band keeps to the 效果代码 below it.</summary>
+        private const int InheritedBandGap = 2;
+
+        /// <summary>
+        /// Height a length measurement may grow to while counting how many
+        /// lines a 简写 wraps to; anything longer than this scrolls inside the
+        /// box instead of stretching the row.
+        /// </summary>
+        private const int MeasureHeightLimit = 4096;
+
+        /// <summary>
+        /// Most lines the 简写提供 band grows to before it scrolls instead: a
+        /// shorthand prints a sentence or two, so anything past this is a
+        /// safety net against one bad entry swallowing the whole column.
+        /// </summary>
+        private const int InheritedMaxLines = 8;
+
         /// <summary>Height of the 添加异画 block above the reference panel.</summary>
         private const int AltArtSectionHeight = 168;
 
-        /// <summary>Width of the 异画 art box inside that block.</summary>
-        private const int AltArtImageWidth = 78;
+        /// <summary>
+        /// Width of the 异画 preview column. The preview fills the whole body
+        /// row, which runs down to the bottom of the 168px block (131px tall
+        /// after the caption); at that height a 63 : 88 card draws about
+        /// 85x119, so this column leaves it a couple of pixels of slack.
+        /// </summary>
+        private const int AltArtImageWidth = 112;
 
-        private static readonly Color PanelSurface = Color.FromArgb(23, 33, 48);
-        private static readonly Color ChipSurface = Color.FromArgb(39, 51, 69);
+        /// <summary>Height of one 保存 / 清空 button.</summary>
+        private const int AltArtActionHeight = 30;
+
+        /// <summary>Gap between the stacked 保存 and 清空 buttons.</summary>
+        private const int AltArtActionGap = 6;
+
+        /// <summary>
+        /// Width of the 保存 / 清空 column beside the queue strip. The pair
+        /// stacks vertically there, so 保存 no longer has to fit
+        /// “保存 3 张异画” and the queue keeps the rest of the band.
+        /// </summary>
+        private const int AltArtActionWidth = 60;
+
+        /// <summary>
+        /// One line of 写入 … 提示 above the queue strip. 18px still holds the
+        /// 8.5pt caption line and leaves the strip its 83px band, which the
+        /// strip turns into ~56x79 tiles.
+        /// </summary>
+        private const int AltArtHintHeight = 18;
+
+        private static Color PanelSurface
+        {
+            get { return AppTheme.TileBackground; }
+        }
+        private static Color ChipSurface
+        {
+            get { return AppTheme.Divider; }
+        }
 
         private readonly Font _titleFont;
         private readonly Font _subtitleFont;
@@ -71,6 +155,59 @@ namespace WeissDeckBuilder.UI
         private FieldBox _comboBox;
         private FieldBox _textBox;
         private FieldBox _codeBox;
+
+        /// <summary>One 效果: 效果内容 above the 效果代码 that carries it, plus
+        /// the read-only text a `*Shorthand` of that 效果 brings in.</summary>
+        private sealed class EffectRow
+        {
+            public Control Cell;
+
+            /// <summary>Wrapper of the 效果内容 caption and box; folded away
+            /// while the 简写 supplies the whole 效果.</summary>
+            public Control TextCell;
+
+            public Label TextCaption;
+            public Label CodeCaption;
+            public FieldBox Text;
+            public FieldBox Code;
+
+            /// <summary>Read-only 简写提供 preview; hidden while the 效果
+            /// carries no `*Shorthand` text.</summary>
+            public FieldBox Inherited;
+
+            public Label InheritedCaption;
+
+            /// <summary>Caption + box of the 简写提供 band, hidden as a whole
+            /// while there is no shorthand text.</summary>
+            public Control InheritedCell;
+
+            /// <summary>Height the preview takes inside the row, 0 when the
+            /// 效果 has no shorthand text.</summary>
+            public int InheritedHeight;
+
+            /// <summary>The 简写提供 text as shown, so the band can be measured
+            /// again whenever the 效果 column changes width.</summary>
+            public string InheritedText;
+
+            /// <summary>True while the 效果内容 box is omitted because the
+            /// `*Shorthand` already prints the whole 效果.</summary>
+            public bool TextHidden;
+        }
+
+        private DarkScrollPanel _effectScroll;
+        private TableLayoutPanel _effectStack;
+        private readonly List<EffectRow> _effectRows = new List<EffectRow>();
+
+        /// <summary>Guards <see cref="LayoutEffectRows"/> against the layout
+        /// pass it starts itself (re-measuring a band can resize the stack).</summary>
+        private bool _layingOutEffects;
+
+        /// <summary>Set once <see cref="Dispose"/> released the fonts, so a late
+        /// layout callback never measures text against a disposed font.</summary>
+        private bool _closed;
+
+        private RoundedButton _addEffectButton;
+        private RoundedButton _removeEffectButton;
 
         private ChipRow _categoryRow;
         private ChipRow _colorRow;
@@ -118,12 +255,26 @@ namespace WeissDeckBuilder.UI
 
         /// <summary>添加异画 section of the right column; hidden for a new card.</summary>
         private Control _altArtSection;
+        private Label _altArtCaption;
         private FieldBox _altIdBox;
         private CardImageDropBox _altImageBox;
+        private AltArtQueueStrip _altQueueStrip;
         private RoundedButton _altSaveButton;
+        private RoundedButton _altClearButton;
         private Label _altStatusLabel;
-        private string _altImagePath;
-        private Image _altPreview;
+        private ToolTip _altToolTip;
+
+        /// <summary>Images waiting to become 异画, in the order they were added.</summary>
+        private readonly List<AltArtQueueItem> _altQueue = new List<AltArtQueueItem>();
+
+        /// <summary>Rows <see cref="ReadAltArts"/> handed to the writer, in request order.</summary>
+        private List<AltArtQueueItem> _altSubmitted;
+
+        /// <summary>Base card the queue was filled for; another card starts empty.</summary>
+        private string _altQueueBaseId = string.Empty;
+
+        /// <summary>True while the number field is filled from the queue.</summary>
+        private bool _altSyncingId;
 
         /// <summary>
         /// Whether 添加异画 applies to the open card. Kept next to
@@ -136,7 +287,7 @@ namespace WeissDeckBuilder.UI
         public event EventHandler SaveRequested;
 
         /// <summary>
-        /// Raised when 保存异画 is clicked: the page hands the request to
+        /// Raised when 保存 is clicked: the page hands the request to
         /// MainForm, which writes it through <see cref="AltArtworkWriter"/>.
         /// </summary>
         public event EventHandler AltArtSaveRequested;
@@ -162,6 +313,13 @@ namespace WeissDeckBuilder.UI
 
         /// <summary>Card table the reference search reads; null disables it.</summary>
         public CardDatabase Database { get; set; }
+
+        /// <summary>
+        /// Chinese name table of the 触发 field: the field shows and accepts the
+        /// names from here, while the card table itself keeps the English enum
+        /// name. Null keeps the English names only.
+        /// </summary>
+        public TriggerGlossary Glossary { get; set; }
 
         /// <summary>
         /// 卡号 -> 卡包 lookup of 添加卡片. The page builds it from
@@ -251,6 +409,8 @@ namespace WeissDeckBuilder.UI
         {
             if (disposing)
             {
+                // 布局回调还会量一次字体，字体释放后不再测量。
+                _closed = true;
                 _referenceStop = true;
                 _searchTimer.Stop();
                 _searchTimer.Dispose();
@@ -262,7 +422,15 @@ namespace WeissDeckBuilder.UI
                 _buttonFont.Dispose();
                 _statusFont.Dispose();
                 DisposePreview();
-                DisposeAltArtPreview();
+                for (int i = 0; i < _altQueue.Count; i++)
+                    _altQueue[i].Dispose();
+                _altQueue.Clear();
+                _altSubmitted = null;
+                if (_altToolTip != null)
+                {
+                    _altToolTip.Dispose();
+                    _altToolTip = null;
+                }
             }
             base.Dispose(disposing);
         }
@@ -312,7 +480,7 @@ namespace WeissDeckBuilder.UI
             DisposePreview();
             _imageBox.SetImage(null, "拖入卡图，或点击选择文件");
             SetAltArtVisible(false);
-            ApplyAltArtImage(null);
+            ClearAltArtQueue();
         }
 
         public void SetStatus(string text, bool error)
@@ -602,7 +770,7 @@ namespace WeissDeckBuilder.UI
             AddFieldCell(_infoContent, 0, 8, "战斗力", out _powerBox);
             AddFieldCell(_infoContent, 1, 8, "灵魂", out _soulBox);
             AddFieldCell(_infoContent, 0, 9, "反击", out _backupBox);
-            AddFieldCell(_infoContent, 1, 9, "触发 (Soul / Book / Gate)", out _triggerBox);
+            AddFieldCell(_infoContent, 1, 9, "触发（可填中文或英文）", out _triggerBox);
             AddFieldCell(_infoContent, 0, 10, "特征 1", out _trait1Box);
             AddFieldCell(_infoContent, 1, 10, "特征 2", out _trait2Box);
             AddFieldCell(_infoContent, 0, 11, "特征 3", out _trait3Box);
@@ -674,6 +842,14 @@ namespace WeissDeckBuilder.UI
             return row;
         }
 
+        /// <summary>
+        /// 中栏: one row per 效果, its 效果内容 above its own 效果代码. CardData.txt
+        /// writes every `Text` line right below the ability that carries it, so
+        /// a multi-effect card reads 内容 1 / 代码 1 / 内容 2 / 代码 2 here too
+        /// instead of collecting every text above every ability. A single
+        /// effect fills the column with the familiar 1 : 2 split; more effects
+        /// scroll, each keeping its own pair.
+        /// </summary>
         private Control BuildEffectColumn()
         {
             var column = new TableLayoutPanel();
@@ -683,22 +859,391 @@ namespace WeissDeckBuilder.UI
             column.BackColor = Color.Transparent;
             column.Margin = new Padding(0);
             column.Padding = new Padding(0);
-            // 效果内容 : 效果代码 = 1 : 2，代码块通常比卡面文字长得多。
-            column.RowStyles.Add(new RowStyle(SizeType.Percent, 33.34F));
-            column.RowStyles.Add(new RowStyle(SizeType.Percent, 66.66F));
             column.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            column.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            column.RowStyles.Add(new RowStyle(SizeType.Absolute, EffectToolbarHeight));
 
-            _textBox = CreateField(true);
-            Control textCell = WrapField("效果内容（卡面上印的效果文字）", _textBox);
-            textCell.Margin = new Padding(0, 0, 0, 8);
-            column.Controls.Add(textCell, 0, 0);
+            _effectStack = new TableLayoutPanel();
+            _effectStack.ColumnCount = 1;
+            _effectStack.RowCount = 0;
+            _effectStack.BackColor = Color.Transparent;
+            _effectStack.Margin = new Padding(0);
+            _effectStack.Padding = new Padding(0);
+            _effectStack.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
-            _codeBox = CreateField(true);
-            Control codeCell = WrapField(
-                "效果代码（Act / Auto / Cont 与 { } 代码块）", _codeBox);
-            codeCell.Margin = new Padding(0);
-            column.Controls.Add(codeCell, 0, 1);
+            _effectScroll = new DarkScrollPanel();
+            _effectScroll.Dock = DockStyle.Fill;
+            _effectScroll.BackColor = Color.Transparent;
+            _effectScroll.Margin = new Padding(0, 0, 0, 6);
+            _effectScroll.ScrollbarReserve = EffectScrollbarReserve;
+            _effectScroll.Content = _effectStack;
+            _effectScroll.Resize += delegate { LayoutEffectRows(); };
+            column.Controls.Add(_effectScroll, 0, 0);
+
+            column.Controls.Add(BuildEffectToolbar(), 0, 1);
+
+            SetEffectRows(new List<CardEffectPair> { new CardEffectPair() });
             return column;
+        }
+
+        private Control BuildEffectToolbar()
+        {
+            var bar = new FlowLayoutPanel();
+            bar.Dock = DockStyle.Fill;
+            bar.FlowDirection = FlowDirection.LeftToRight;
+            bar.WrapContents = false;
+            bar.BackColor = Color.Transparent;
+            bar.Margin = new Padding(0);
+            bar.Padding = new Padding(0);
+
+            _addEffectButton = CreateActionButton("＋ 添加效果", ChipSurface,
+                AppTheme.Text, 104);
+            _addEffectButton.Margin = new Padding(0, 0, 8, 0);
+            _addEffectButton.Click += delegate
+            {
+                AddEffectRow(new CardEffectPair(), true);
+            };
+            bar.Controls.Add(_addEffectButton);
+
+            _removeEffectButton = CreateActionButton("移除最后一条", ChipSurface,
+                AppTheme.TextMuted, 112);
+            _removeEffectButton.Margin = new Padding(0);
+            _removeEffectButton.Click += delegate { RemoveLastEffectRow(); };
+            bar.Controls.Add(_removeEffectButton);
+            return bar;
+        }
+
+        /// <summary>Fills the 效果 rows from the pairs of the opened card.</summary>
+        private void SetEffectRows(IList<CardEffectPair> pairs)
+        {
+            ClearEffectRows();
+            if (pairs == null || pairs.Count == 0)
+                pairs = new List<CardEffectPair> { new CardEffectPair() };
+
+            for (int i = 0; i < pairs.Count; i++)
+                AddEffectRow(pairs[i], false);
+
+            if (_effectScroll != null)
+                _effectScroll.ScrollToTop();
+        }
+
+        private void ClearEffectRows()
+        {
+            for (int i = 0; i < _effectRows.Count; i++)
+            {
+                Control cell = _effectRows[i].Cell;
+                if (_effectStack != null && _effectStack.Controls.Contains(cell))
+                    _effectStack.Controls.Remove(cell);
+                cell.Dispose();
+            }
+
+            _effectRows.Clear();
+            _textBox = null;
+            _codeBox = null;
+            if (_effectStack != null)
+            {
+                _effectStack.RowStyles.Clear();
+                _effectStack.RowCount = 0;
+                _effectStack.Height = 0;
+            }
+        }
+
+        private EffectRow AddEffectRow(CardEffectPair pair, bool focus)
+        {
+            EffectRow row = BuildEffectRow();
+            row.Text.Text = ToDisplayText(pair == null ? string.Empty : pair.Text);
+            row.Code.Text = ToDisplayText(pair == null ? string.Empty : pair.Code);
+            ApplyInheritedText(row, pair == null ? string.Empty : pair.InheritedText);
+
+            int index = _effectRows.Count;
+            _effectRows.Add(row);
+            _effectStack.RowCount = _effectRows.Count;
+            _effectStack.RowStyles.Add(new RowStyle(SizeType.Absolute,
+                EffectRowHeight + row.InheritedHeight));
+            _effectStack.Controls.Add(row.Cell, 0, index);
+
+            // 焦点默认落在第一条可写的 效果内容 上：简写行省掉了这个框。
+            if (_textBox == null && !row.TextHidden)
+                _textBox = row.Text;
+            if (_codeBox == null)
+                _codeBox = row.Code;
+
+            RenumberEffectRows();
+            LayoutEffectRows();
+            if (focus)
+            {
+                if (_effectScroll != null)
+                    _effectScroll.ScrollToBottom();
+                row.Text.Input.Focus();
+            }
+            return row;
+        }
+
+        /// <summary>
+        /// Fills the read-only 简写提供 band of one 效果 row. A 效果 without a
+        /// `*Shorthand` keeps the band folded away, so a card that prints all
+        /// its text itself looks exactly like before. A `*Shorthand` row whose
+        /// 卡块 prints no `Text` of its own has nothing to type into: the empty
+        /// 效果内容 box is omitted and its room goes to the 效果代码.
+        /// </summary>
+        private void ApplyInheritedText(EffectRow row, string text)
+        {
+            string display = ToDisplayText(text);
+            if (row.Inherited != null)
+                row.Inherited.Text = display;
+
+            row.InheritedText = display;
+            RefreshInheritedHeight(row);
+
+            if (row.InheritedCell != null)
+                row.InheritedCell.Visible = row.InheritedHeight > 0;
+
+            row.TextHidden = row.InheritedHeight > 0 &&
+                (row.Text == null || row.Text.Input.Text.Length == 0);
+            if (row.TextCell != null)
+                row.TextCell.Visible = !row.TextHidden;
+
+            var cell = row.Cell as TableLayoutPanel;
+            if (cell != null && cell.RowStyles.Count > 2)
+            {
+                cell.RowStyles[1].Height = row.InheritedHeight;
+                cell.RowStyles[0].SizeType = row.TextHidden
+                    ? SizeType.Absolute
+                    : SizeType.Percent;
+                cell.RowStyles[0].Height = row.TextHidden ? 0F : 33.34F;
+                cell.RowStyles[2].Height = row.TextHidden ? 100F : 66.66F;
+            }
+        }
+
+        /// <summary>
+        /// Re-measures the 简写提供 band of one row against the width the 效果
+        /// column currently gives it and hands the new height to the row.
+        /// </summary>
+        private void RefreshInheritedHeight(EffectRow row)
+        {
+            if (row == null || _closed)
+                return;
+
+            int height = string.IsNullOrEmpty(row.InheritedText)
+                ? 0
+                : InheritedPreviewHeight(row.InheritedText, InheritedTextWidth());
+            if (height == row.InheritedHeight)
+                return;
+
+            row.InheritedHeight = height;
+            var cell = row.Cell as TableLayoutPanel;
+            if (cell != null && cell.RowStyles.Count > 1)
+                cell.RowStyles[1].Height = height;
+        }
+
+        /// <summary>
+        /// Inner width the 简写提供 box gets: the 效果 column minus its scrollbar,
+        /// the right margin and the padding of the box. 0 while the column has
+        /// not been laid out yet, so a card opened before the page is shown
+        /// falls back to counting the lines of the text.
+        /// </summary>
+        private int InheritedTextWidth()
+        {
+            if (_effectScroll == null)
+                return 0;
+
+            int width = _effectScroll.ClientSize.Width - EffectScrollbarReserve -
+                EffectRowRightMargin - FieldBoxInnerPadding -
+                FieldBoxScrollbarWidth;
+            return width < 80 ? 0 : width;
+        }
+
+        /// <summary>
+        /// Height the 简写提供 band needs for <paramref name="display"/>: the
+        /// caption row on top, one text line per line the 简写 wraps to, plus
+        /// the padding a <see cref="FieldBox"/> keeps around its input and the
+        /// gap to the 效果代码 below. A one-line 简写 therefore gets a
+        /// one-line box, a two-line one a two-line box, and nothing is clipped
+        /// until it passes <see cref="InheritedMaxLines"/>.
+        /// </summary>
+        private int InheritedPreviewHeight(string display, int width)
+        {
+            int lineHeight = Math.Max(16, _bodyFont.Height + 2);
+            int lines = 1;
+            for (int i = 0; i < display.Length; i++)
+            {
+                if (display[i] == '\n')
+                    lines++;
+            }
+
+            if (width > 0)
+            {
+                const TextFormatFlags wrapFlags =
+                    TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl;
+                var limit = new Size(width, MeasureHeightLimit);
+                Size oneLine = TextRenderer.MeasureText("測", _bodyFont,
+                    limit, wrapFlags);
+                Size wrapped = TextRenderer.MeasureText(display, _bodyFont,
+                    limit, wrapFlags);
+                if (oneLine.Height > 0)
+                {
+                    int wrappedLines = (int)Math.Round(
+                        wrapped.Height / (double)oneLine.Height);
+                    if (wrappedLines > lines)
+                        lines = wrappedLines;
+                }
+            }
+
+            if (lines > InheritedMaxLines)
+                lines = InheritedMaxLines;
+
+            return CaptionHeight + lines * lineHeight + FieldBoxInnerPadding +
+                InheritedBandGap;
+        }
+
+        private void RemoveLastEffectRow()
+        {
+            if (_effectRows.Count <= 1)
+                return;
+
+            EffectRow row = _effectRows[_effectRows.Count - 1];
+            _effectRows.RemoveAt(_effectRows.Count - 1);
+            _effectStack.RowStyles.RemoveAt(_effectStack.RowStyles.Count - 1);
+            _effectStack.RowCount = _effectRows.Count;
+            _effectStack.Controls.Remove(row.Cell);
+            row.Cell.Dispose();
+
+            RenumberEffectRows();
+            LayoutEffectRows();
+        }
+
+        private EffectRow BuildEffectRow()
+        {
+            var row = new EffectRow();
+
+            var cell = new TableLayoutPanel();
+            cell.Dock = DockStyle.Fill;
+            cell.ColumnCount = 1;
+            cell.RowCount = 3;
+            cell.BackColor = Color.Transparent;
+            cell.Margin = new Padding(0, 0, 0, EffectRowGap);
+            cell.Padding = new Padding(0);
+            cell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            // 效果内容 : 效果代码 = 1 : 2，代码块通常比卡面文字长得多。中间的
+            // 简写提供预览默认 0 高：只有真的带 `*Shorthand` 的效果才占地方。
+            cell.RowStyles.Add(new RowStyle(SizeType.Percent, 33.34F));
+            cell.RowStyles.Add(new RowStyle(SizeType.Absolute, 0F));
+            cell.RowStyles.Add(new RowStyle(SizeType.Percent, 66.66F));
+            row.Cell = cell;
+
+            Label textCaption;
+            row.Text = CreateField(true);
+            Control textCell = WrapControl(string.Empty, row.Text,
+                new Padding(0, 0, EffectRowRightMargin, 2), out textCaption);
+            row.TextCaption = textCaption;
+            row.TextCell = textCell;
+            cell.Controls.Add(textCell, 0, 0);
+
+            // 简写提供: the text a `*Shorthand` copies in, read-only right above
+            // the 效果代码 it belongs to. It gets its own caption row — the same
+            // 效果 N · … title the 内容 / 代码 boxes carry — and the box below it
+            // spans the whole column, so the band is a normally stacked caption
+            // plus field and not a two-column strip.
+            row.Inherited = CreateField(true);
+            row.Inherited.Input.ReadOnly = true;
+            row.Inherited.Input.ForeColor = AppTheme.TextMuted;
+            row.Inherited.Input.BackColor = AppTheme.InputBackground;
+
+            Label inheritedCaption;
+            Control inheritedCell = WrapControl(InheritedLabel, row.Inherited,
+                new Padding(0, 0, EffectRowRightMargin, InheritedBandGap),
+                out inheritedCaption);
+            row.InheritedCaption = inheritedCaption;
+
+            row.InheritedCell = inheritedCell;
+            inheritedCell.Visible = false;
+            cell.Controls.Add(inheritedCell, 0, 1);
+
+            Label codeCaption;
+            row.Code = CreateField(true);
+            Control codeCell = WrapControl(string.Empty, row.Code,
+                new Padding(0, 0, EffectRowRightMargin, 0), out codeCaption);
+            row.CodeCaption = codeCaption;
+            cell.Controls.Add(codeCell, 0, 2);
+            return row;
+        }
+
+        /// <summary>
+        /// Captions carry the 效果 number once there is more than one, so the
+        /// player can tell which text belongs to which code block.
+        /// </summary>
+        private void RenumberEffectRows()
+        {
+            bool single = _effectRows.Count <= 1;
+            for (int i = 0; i < _effectRows.Count; i++)
+            {
+                EffectRow row = _effectRows[i];
+                string head = single ? "效果" : "效果 " + (i + 1) + " · ";
+                row.TextCaption.Text = head + "内容（卡面上印的效果文字）";
+                row.CodeCaption.Text = head + "代码（Act / Auto / Cont 与 { } 代码块）";
+
+                // 简写提供 的标题跟 内容 / 代码 一样带编号；只有一条效果时它就是
+                // 一行普通标题，不再缩成左边一列。
+                row.InheritedCaption.Text = single
+                    ? InheritedLabel
+                    : "效果 " + (i + 1) + " · " + InheritedLabel;
+            }
+
+            if (_removeEffectButton != null)
+                _removeEffectButton.Enabled = _effectRows.Count > 1;
+        }
+
+        /// <summary>
+        /// One 效果 fills the column, so a card with a single effect keeps the
+        /// roomy 1 : 2 split; several effects get a readable fixed height each
+        /// and the column scrolls. A 效果 that carries `*Shorthand` text adds
+        /// room for the 简写提供 band — its caption row, the text it shows and
+        /// the gap to the 效果代码 below — so the band never overlaps the code.
+        /// </summary>
+        private void LayoutEffectRows()
+        {
+            if (_effectStack == null || _effectRows.Count == 0 ||
+                _layingOutEffects)
+                return;
+
+            _layingOutEffects = true;
+            try
+            {
+                int viewport = _effectScroll == null ? 0 : _effectScroll.ClientSize.Height;
+                int baseHeight = _effectRows.Count <= 1
+                    ? Math.Max(EffectRowHeight, viewport)
+                    : EffectRowHeight;
+
+                bool moved = false;
+                int total = 0;
+                for (int i = 0; i < _effectRows.Count && i < _effectStack.RowStyles.Count; i++)
+                {
+                    // A column resize re-wraps the 简写提供 text, so the band of
+                    // every row is measured again before the rows are stacked.
+                    RefreshInheritedHeight(_effectRows[i]);
+
+                    int height = baseHeight + _effectRows[i].InheritedHeight;
+                    if (Math.Abs(_effectStack.RowStyles[i].Height - height) > 0.5F)
+                    {
+                        _effectStack.RowStyles[i].Height = height;
+                        moved = true;
+                    }
+                    total += height;
+                }
+
+                if (_effectStack.Height != total)
+                {
+                    _effectStack.Height = total;
+                    moved = true;
+                }
+
+                if (moved)
+                    _effectStack.PerformLayout();
+            }
+            finally
+            {
+                _layingOutEffects = false;
+            }
         }
 
         private Control WrapField(string caption, FieldBox box)
@@ -713,6 +1258,13 @@ namespace WeissDeckBuilder.UI
 
         private Control WrapControl(string caption, Control content, Padding margin)
         {
+            Label captionLabel;
+            return WrapControl(caption, content, margin, out captionLabel);
+        }
+
+        private Control WrapControl(string caption, Control content, Padding margin,
+            out Label captionLabel)
+        {
             var wrapper = new TableLayoutPanel();
             wrapper.Dock = DockStyle.Fill;
             wrapper.ColumnCount = 1;
@@ -725,6 +1277,7 @@ namespace WeissDeckBuilder.UI
             wrapper.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
             var label = new Label();
+            captionLabel = label;
             label.Text = caption ?? string.Empty;
             label.Dock = DockStyle.Fill;
             label.AutoEllipsis = true;
@@ -777,67 +1330,56 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
-        /// 添加异画: the card number of the variant plus the art that carries it.
+        /// 添加异画: the queue of variant numbers plus the art that carries them.
         /// A variant lives only as an image below
-        /// StreamingAssets\AlternateArtwork, so this block writes a file and
-        /// never touches CardData.txt.
+        /// StreamingAssets\AlternateArtwork, so this block writes files and
+        /// never touches CardData.txt. The height stays 168px and the pictures
+        /// queue sideways instead of making the block taller. The bottom band
+        /// splits left / right: the thumbnail queue on the left, the 保存 /
+        /// 清空 pair stacked on the right, so the tiles get the row the buttons
+        /// used to cross and the preview keeps the full 131px body row.
         /// </summary>
         private Control BuildAltArtSection()
         {
             var host = new TableLayoutPanel();
             host.Dock = DockStyle.Fill;
-            host.ColumnCount = 1;
-            host.RowCount = 3;
+            host.ColumnCount = 2;
+            host.RowCount = 2;
             host.BackColor = PanelSurface;
             host.Margin = new Padding(0, 0, 0, 8);
             host.Padding = new Padding(10, 6, 10, 6);
             host.RowStyles.Add(new RowStyle(SizeType.Absolute, CaptionHeight));
             host.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            host.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
+            // Column 0 is the preview, column 1 the 卡号 / 提示 / 队列 + 按钮 stack.
+            host.ColumnStyles.Add(new ColumnStyle(
+                SizeType.Absolute, AltArtImageWidth));
             host.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
-            var caption = new Label();
-            caption.Text = "添加异画";
-            caption.Dock = DockStyle.Fill;
-            caption.AutoEllipsis = true;
-            caption.Font = _captionFont;
-            caption.ForeColor = AppTheme.TextSoft;
-            caption.BackColor = Color.Transparent;
-            caption.TextAlign = ContentAlignment.MiddleLeft;
-            caption.Margin = new Padding(2, 0, 0, 0);
-            host.Controls.Add(caption, 0, 0);
+            _altArtCaption = CreateCaption("添加异画");
+            _altArtCaption.ForeColor = AppTheme.TextSoft;
+            host.Controls.Add(_altArtCaption, 0, 0);
+            host.SetColumnSpan(_altArtCaption, 2);
 
-            var body = new TableLayoutPanel();
-            body.Dock = DockStyle.Fill;
-            body.ColumnCount = 2;
-            body.RowCount = 1;
-            body.BackColor = Color.Transparent;
-            body.Margin = new Padding(0);
-            body.Padding = new Padding(0);
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            body.ColumnStyles.Add(new ColumnStyle(
-                SizeType.Absolute, AltArtImageWidth));
-            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            // The hint line under the number is one row of text; a tooltip
+            // carries the full 写入 … sentence that rarely fits the column.
+            _altToolTip = new ToolTip();
 
-            var numberCell = new TableLayoutPanel();
-            numberCell.Dock = DockStyle.Fill;
-            numberCell.ColumnCount = 1;
-            numberCell.RowCount = 3;
-            numberCell.BackColor = Color.Transparent;
-            numberCell.Margin = new Padding(0, 0, 8, 0);
-            numberCell.Padding = new Padding(0);
-            numberCell.RowStyles.Add(new RowStyle(SizeType.Absolute, CaptionHeight));
-            numberCell.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
-            numberCell.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            numberCell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-
-            numberCell.Controls.Add(CreateCaption(
-                "异画卡号（基卡号 + 一个字母）"), 0, 0);
+            var right = new TableLayoutPanel();
+            right.Dock = DockStyle.Fill;
+            right.ColumnCount = 1;
+            right.RowCount = 3;
+            right.BackColor = Color.Transparent;
+            right.Margin = new Padding(0);
+            right.Padding = new Padding(0);
+            right.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
+            right.RowStyles.Add(new RowStyle(SizeType.Absolute, AltArtHintHeight));
+            right.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            right.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
             _altIdBox = CreateField(false);
             _altIdBox.Dock = DockStyle.Fill;
-            _altIdBox.Input.TextChanged += delegate { UpdateAltArtHint(); };
-            numberCell.Controls.Add(_altIdBox, 0, 1);
+            _altIdBox.Input.TextChanged += AltIdBox_TextChanged;
+            right.Controls.Add(_altIdBox, 0, 0);
 
             _altStatusLabel = new Label();
             _altStatusLabel.Text = string.Empty;
@@ -848,34 +1390,76 @@ namespace WeissDeckBuilder.UI
             _altStatusLabel.BackColor = Color.Transparent;
             _altStatusLabel.TextAlign = ContentAlignment.MiddleLeft;
             _altStatusLabel.Margin = new Padding(2, 0, 0, 0);
-            numberCell.Controls.Add(_altStatusLabel, 0, 2);
+            right.Controls.Add(_altStatusLabel, 0, 1);
 
-            body.Controls.Add(numberCell, 0, 0);
+            // The band under the hint splits left / right: the queue takes the
+            // width, 保存 / 清空 keep a 60px column. Losing the old 30px button
+            // row lets the tiles grow from ~35x49 to ~56x79.
+            var band = new TableLayoutPanel();
+            band.Dock = DockStyle.Fill;
+            band.ColumnCount = 2;
+            band.RowCount = 1;
+            band.BackColor = Color.Transparent;
+            band.Margin = new Padding(0);
+            band.Padding = new Padding(0);
+            band.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            band.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            band.ColumnStyles.Add(new ColumnStyle(
+                SizeType.Absolute, AltArtActionWidth));
 
-            _altImageBox = new CardImageDropBox();
-            _altImageBox.Dock = DockStyle.Fill;
-            _altImageBox.HintFont = _captionFont;
-            _altImageBox.SurfaceColor = PanelSurface;
-            _altImageBox.BrowseRequested += delegate { BrowseForAltArtImage(); };
-            _altImageBox.FileDropped += AltImageBox_FileDropped;
-            body.Controls.Add(_altImageBox, 1, 0);
-
-            host.Controls.Add(body, 0, 1);
+            _altQueueStrip = new AltArtQueueStrip();
+            _altQueueStrip.Dock = DockStyle.Fill;
+            _altQueueStrip.Margin = new Padding(0, 2, 8, 0);
+            _altQueueStrip.BadgeFont = _captionFont;
+            _altQueueStrip.SelectedColor = AppTheme.Accent;
+            _altQueueStrip.ProblemColor = AppTheme.Danger;
+            _altQueueStrip.SelectionChanged += AltQueueStrip_SelectionChanged;
+            _altQueueStrip.RemoveRequested += AltQueueStrip_RemoveRequested;
+            _altQueueStrip.AddRequested += delegate { BrowseForAltArtImages(); };
+            band.Controls.Add(_altQueueStrip, 0, 0);
 
             var actions = new FlowLayoutPanel();
-            actions.Dock = DockStyle.Fill;
-            actions.FlowDirection = FlowDirection.LeftToRight;
+            // Top to bottom and pinned to the bottom of the band: 保存 sits
+            // above 清空, and 清空 ends flush with the bottom right corner the
+            // pair has always hugged.
+            actions.Dock = DockStyle.Bottom;
+            actions.Height = AltArtActionHeight * 2 + AltArtActionGap;
+            actions.FlowDirection = FlowDirection.TopDown;
             actions.WrapContents = false;
             actions.BackColor = Color.Transparent;
             actions.Margin = new Padding(0);
-            actions.Padding = new Padding(0, 2, 0, 0);
+            actions.Padding = new Padding(0);
 
-            _altSaveButton = CreateActionButton("保存异画", ChipSurface,
-                AppTheme.TextSoft, 96);
-            _altSaveButton.Margin = new Padding(0);
+            _altSaveButton = CreateActionButton("保存", ChipSurface,
+                AppTheme.TextSoft, AltArtActionWidth);
+            _altSaveButton.Margin = new Padding(0, 0, 0, AltArtActionGap);
             _altSaveButton.Click += delegate { RaiseAltArtSaveRequested(); };
             actions.Controls.Add(_altSaveButton);
-            host.Controls.Add(actions, 0, 2);
+
+            _altClearButton = CreateActionButton("清空", PanelSurface,
+                AppTheme.TextMuted, AltArtActionWidth);
+            _altClearButton.Margin = new Padding(0);
+            _altClearButton.Click += delegate { ClearAltArtQueue(); };
+            actions.Controls.Add(_altClearButton);
+
+            band.Controls.Add(actions, 1, 0);
+            right.Controls.Add(band, 0, 2);
+            host.Controls.Add(right, 1, 1);
+
+            _altImageBox = new CardImageDropBox();
+            _altImageBox.Dock = DockStyle.Fill;
+            _altImageBox.Margin = new Padding(0, 0, 8, 0);
+            // No caption and a 6px frame instead of 12: the cell runs from the
+            // caption all the way down to the bottom of the block (131px tall),
+            // so it draws an ~85x119 card instead of the ~65x91 one it had
+            // while the buttons crossed the whole block on a row of their own.
+            _altImageBox.ShowCaption = false;
+            _altImageBox.InnerPadding = 6;
+            _altImageBox.HintFont = _captionFont;
+            _altImageBox.SurfaceColor = PanelSurface;
+            _altImageBox.BrowseRequested += delegate { BrowseForAltArtImages(); };
+            _altImageBox.FileDropped += AltImageBox_FileDropped;
+            host.Controls.Add(_altImageBox, 0, 1);
 
             return host;
         }
@@ -1055,13 +1639,12 @@ namespace WeissDeckBuilder.UI
             _backupBox.Text = draft.Backup.ToString();
             _triggerBox.Text = draft.Trigger == TriggerIcon.None
                 ? string.Empty
-                : draft.Trigger.ToString();
+                : TriggerName(draft.Trigger);
             _trait1Box.Text = draft.Trait1 ?? string.Empty;
             _trait2Box.Text = draft.Trait2 ?? string.Empty;
             _trait3Box.Text = draft.Trait3 ?? string.Empty;
             _comboBox.Text = draft.Combo ?? string.Empty;
-            _textBox.Text = ToDisplayText(draft.Text);
-            _codeBox.Text = ToDisplayText(draft.EffectCode);
+            SetEffectRows(CardEffectSplitter.PairDraft(draft));
 
             _categoryRow.Select(draft.Category);
             _colorRow.Select(draft.Color);
@@ -1071,6 +1654,16 @@ namespace WeissDeckBuilder.UI
             ShowPreview(draft.PreviewImagePath);
             _subtitleLabel.Text = BuildSubtitle();
             RefreshAltArtSection();
+        }
+
+        /// <summary>
+        /// Name shown in the 触发 field: the shared Chinese table first, then
+        /// the English enum name so a card without a Chinese name still reads
+        /// exactly like the card table.
+        /// </summary>
+        private string TriggerName(TriggerIcon trigger)
+        {
+            return Glossary == null ? trigger.ToString() : Glossary.GetName(trigger);
         }
 
         /// <summary>
@@ -1096,7 +1689,20 @@ namespace WeissDeckBuilder.UI
             }
 
             string id = _idBox.Text.Trim();
-            CardPackIndex index = id.Length == 0 ? null : EnsurePackIndex();
+            if (id.Length == 0)
+            {
+                // 添加卡片 opens with an empty 卡号: the number decides the pack,
+                // so the row must not offer every pack of the series (it used
+                // to stay filled after 修改卡片 and to list all chips whenever
+                // the series has more than one pack).
+                _packHint = draft.HasFolder ? null : "输入卡号后自动分配卡包";
+                _folderRow.ClearChips();
+                SetFolderRowVisible(false);
+                RefreshHeader();
+                return;
+            }
+
+            CardPackIndex index = EnsurePackIndex();
             IList<CardPackTarget> targets = index == null ? null : index.Find(id);
 
             if (targets != null && targets.Count > 0)
@@ -1124,12 +1730,7 @@ namespace WeissDeckBuilder.UI
                 return;
             }
 
-            bool hasSeriesChoice = _folders != null && _folders.Count > 1;
-            _packHint = id.Length == 0
-                ? (hasSeriesChoice
-                    ? "选择卡包，或输入卡号自动分配"
-                    : (draft.HasFolder ? null : "输入卡号后自动分配卡包"))
-                : "卡号前缀 " + CardPackIndex.CardIdHead(id) + " 没有匹配的卡包";
+            _packHint = "卡号前缀 " + CardPackIndex.CardIdHead(id) + " 没有匹配的卡包";
 
             if (_folders != null && _folders.Count > 0)
                 ShowSeriesFolders(draft);
@@ -1372,11 +1973,109 @@ namespace WeissDeckBuilder.UI
             if (!visible)
                 return;
 
-            _altIdBox.Text = SuggestAltArtId();
-            ApplyAltArtImage(null);
+            // The queue belongs to one base card: opening another card (or the
+            // same one after an id edit) starts over instead of saving letters
+            // that name the wrong card.
+            if (!string.Equals(_altQueueBaseId, AltArtBaseCardId,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                _altQueueBaseId = AltArtBaseCardId ?? string.Empty;
+                ClearAltArtQueue();
+            }
+            else
+            {
+                RefreshAltArtQueue(SelectedAltArtIndex);
+            }
+        }
+
+        /// <summary>Row the number field and the preview belong to.</summary>
+        private int SelectedAltArtIndex
+        {
+            get { return _altQueueStrip == null ? -1 : _altQueueStrip.SelectedIndex; }
+        }
+
+        /// <summary>
+        /// Letters the queue already uses, so three images added in a row get
+        /// a、b、c instead of all asking for the same free letter.
+        /// </summary>
+        private HashSet<char> ReservedAltArtSuffixes()
+        {
+            var reserved = new HashSet<char>();
+            for (int i = 0; i < _altQueue.Count; i++)
+                TrackAltArtSuffix(reserved, _altQueue[i].AltId);
+            return reserved;
+        }
+
+        private static void TrackAltArtSuffix(HashSet<char> reserved, string altId)
+        {
+            string id = (altId ?? string.Empty).Trim();
+            if (id.Length == 0)
+                return;
+
+            char suffix = id[id.Length - 1];
+            if (AltArtworkNaming.IsUsableSuffix(suffix))
+                reserved.Add(suffix);
+        }
+
+        /// <summary>Next free variant number, queue letters included.</summary>
+        private string NextAltArtId(ISet<char> reserved)
+        {
+            if (_draft == null)
+                return string.Empty;
+
+            return AltArtworkWriter.SuggestAltId(AltArtBaseCardId, _draft.Prefix,
+                _draft.FolderPath, AlternateArtworkRoot, reserved);
+        }
+
+        /// <summary>
+        /// Adds dropped / picked images to the queue. Every image is numbered on
+        /// its own, so nine pictures dropped at once become a … i in one go.
+        /// </summary>
+        private void AppendAltArtImages(IList<string> paths)
+        {
+            if (_draft == null || !_altArtVisible || paths == null)
+                return;
+
+            int added = 0;
+            string skipped = null;
+            HashSet<char> reserved = ReservedAltArtSuffixes();
+            for (int i = 0; i < paths.Count; i++)
+            {
+                string path = paths[i];
+                if (string.IsNullOrEmpty(path))
+                    continue;
+
+                if (!CardDataWriter.IsSupportedImage(path))
+                {
+                    if (skipped == null)
+                        skipped = Path.GetFileName(path);
+                    continue;
+                }
+
+                var item = new AltArtQueueItem(path, NextAltArtId(reserved));
+                item.LoadThumbnail();
+                _altQueue.Add(item);
+                TrackAltArtSuffix(reserved, item.AltId);
+                added++;
+            }
+
+            if (added == 0)
+            {
+                SetAltArtStatus(skipped == null
+                    ? "没有可加入的异画卡图"
+                    : "异画只认 png / jpg：" + skipped, true);
+                return;
+            }
+
+            RefreshAltArtQueue(_altQueue.Count - 1);
+            SetAltArtStatus(skipped == null
+                ? "已加入 " + added + " 张，点 保存 写入 AlternateArtwork"
+                : "已加入 " + added + " 张；跳过 " + skipped + "（只认 png / jpg）",
+                skipped != null);
         }
 
         private void SetAltArtVisible(bool visible)
+
         {
             _altArtVisible = visible;
             if (_altArtSection == null)
@@ -1388,7 +2087,157 @@ namespace WeissDeckBuilder.UI
                 column.RowStyles[0].Height = visible ? AltArtSectionHeight : 0F;
         }
 
-        /// <summary>Variant number the pack does not use yet, base card included.</summary>
+        /// <summary>
+        /// Pushes the queue into the strip and the selected row into the number
+        /// field and the preview. -1 means an empty queue.
+        /// </summary>
+        private void RefreshAltArtQueue(int selected)
+        {
+            if (selected >= _altQueue.Count)
+                selected = _altQueue.Count - 1;
+            if (selected < 0 && _altQueue.Count > 0)
+                selected = 0;
+
+            if (_altQueueStrip != null)
+                _altQueueStrip.SetItems(_altQueue, selected);
+
+            _altSyncingId = true;
+            try
+            {
+                if (_altIdBox == null)
+                    return;
+
+                _altIdBox.Text = selected >= 0 && selected < _altQueue.Count
+                    ? _altQueue[selected].AltId
+                    : SuggestAltArtId();
+            }
+            finally
+            {
+                _altSyncingId = false;
+            }
+
+            ShowAltArtPreview(selected);
+            UpdateAltArtCaption();
+            UpdateAltArtHint();
+        }
+
+        private void ShowAltArtPreview(int index)
+        {
+            if (_altImageBox == null)
+                return;
+
+            Image image = index >= 0 && index < _altQueue.Count
+                ? _altQueue[index].Thumbnail
+                : null;
+            _altImageBox.SetImage(image, image == null
+                ? "拖入异画卡图\r\n可多选，也可拖文件夹"
+                : "继续拖入可追加");
+        }
+
+        /// <summary>标题跟着队列张数走；保存 / 清空 只是按钮，不再拉长。</summary>
+        private void UpdateAltArtCaption()
+        {
+            int count = _altQueue.Count;
+            if (_altArtCaption != null)
+            {
+                _altArtCaption.Text = count == 0
+                    ? "添加异画 · 可一次拖入多张"
+                    : string.Format("添加异画 · {0} 张待保存", count);
+            }
+
+            // 60px 放不下“保存 3 张异画”，张数只在标题里说一遍。
+            if (_altSaveButton != null)
+            {
+                _altSaveButton.Text = "保存";
+                _altSaveButton.Enabled = count > 0;
+            }
+
+            if (_altClearButton != null)
+                _altClearButton.Enabled = count > 0;
+        }
+
+        private void AltQueueStrip_SelectionChanged(object sender, EventArgs e)
+        {
+            int index = SelectedAltArtIndex;
+            _altSyncingId = true;
+            try
+            {
+                if (_altIdBox != null && index >= 0 && index < _altQueue.Count)
+                    _altIdBox.Text = _altQueue[index].AltId;
+            }
+            finally
+            {
+                _altSyncingId = false;
+            }
+
+            ShowAltArtPreview(index);
+            UpdateAltArtHint();
+        }
+
+        private void AltQueueStrip_RemoveRequested(object sender, EventArgs e)
+        {
+            RemoveAltArtItem(SelectedAltArtIndex);
+        }
+
+        private void AltIdBox_TextChanged(object sender, EventArgs e)
+        {
+            if (_altSyncingId)
+                return;
+
+            int index = SelectedAltArtIndex;
+            if (index >= 0 && index < _altQueue.Count)
+                _altQueue[index].AltId = _altIdBox.Text.Trim();
+
+            UpdateAltArtHint();
+        }
+
+        /// <summary>Drops one row and selects its neighbour.</summary>
+        private void RemoveAltArtItem(int index)
+        {
+            if (index < 0 || index >= _altQueue.Count)
+                return;
+
+            AltArtQueueItem item = _altQueue[index];
+            _altQueue.RemoveAt(index);
+            item.Dispose();
+
+            int next = _altQueue.Count == 0
+                ? -1
+                : Math.Min(index, _altQueue.Count - 1);
+            RefreshAltArtQueue(next);
+        }
+
+        private void ClearAltArtQueue()
+        {
+            for (int i = 0; i < _altQueue.Count; i++)
+                _altQueue[i].Dispose();
+            _altQueue.Clear();
+            _altSubmitted = null;
+            RefreshAltArtQueue(-1);
+        }
+
+        /// <summary>Another row of the queue already claims this number.</summary>
+        private string FindQueuedDuplicate(int index)
+        {
+            string id = (_altQueue[index].AltId ?? string.Empty).Trim();
+            if (id.Length == 0)
+                return null;
+
+            for (int i = 0; i < _altQueue.Count; i++)
+            {
+                if (i == index)
+                    continue;
+
+                if (string.Equals((_altQueue[i].AltId ?? string.Empty).Trim(),
+                    id, StringComparison.OrdinalIgnoreCase))
+                {
+                    return id;
+                }
+            }
+            return null;
+        }
+
+
         private string SuggestAltArtId()
         {
             if (_draft == null)
@@ -1410,10 +2259,31 @@ namespace WeissDeckBuilder.UI
 
             string problem;
             string hint = DescribeAltArtTarget(out problem);
+            int index = SelectedAltArtIndex;
+            if (index >= 0 && index < _altQueue.Count)
+            {
+                string duplicate = problem == null
+                    ? FindQueuedDuplicate(index)
+                    : null;
+                if (duplicate != null)
+                {
+                    problem = "duplicate";
+                    hint = "本页已经用了这个卡号：" + duplicate;
+                }
+
+                // The strip paints this row with a red frame, so a refused
+                // number is visible without reading the hint line.
+                _altQueue[index].Problem = problem == null ? null : hint;
+            }
+
             _altStatusLabel.Text = hint;
             _altStatusLabel.ForeColor = problem == null
                 ? AppTheme.TextMuted
                 : AppTheme.Danger;
+            if (_altToolTip != null)
+                _altToolTip.SetToolTip(_altStatusLabel, hint);
+            if (_altQueueStrip != null)
+                _altQueueStrip.Invalidate();
         }
 
         private string DescribeAltArtTarget(out string problem)
@@ -1481,66 +2351,30 @@ namespace WeissDeckBuilder.UI
                 handler(this, EventArgs.Empty);
         }
 
-        private void BrowseForAltArtImage()
+        private void BrowseForAltArtImages()
         {
             using (var dialog = new OpenFileDialog())
             {
-                dialog.Title = "选择异画卡图";
+                dialog.Title = "选择异画卡图（可多选）";
                 // The game only reads .png / .jpg out of AlternateArtwork, so
                 // the picker offers nothing else.
                 dialog.Filter = "异画卡图 (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg";
                 dialog.CheckFileExists = true;
+                dialog.Multiselect = true;
                 if (dialog.ShowDialog(FindForm()) != DialogResult.OK)
                     return;
 
-                ApplyAltArtImage(dialog.FileName);
+                AppendAltArtImages(dialog.FileNames);
             }
         }
 
         private void AltImageBox_FileDropped(object sender,
             CardImageDroppedEventArgs e)
         {
-            if (e == null || string.IsNullOrEmpty(e.Path))
+            if (e == null)
                 return;
 
-            ApplyAltArtImage(e.Path);
-        }
-
-        private void ApplyAltArtImage(string path)
-        {
-            _altImagePath = path;
-            DisposeAltArtPreview();
-
-            if (!string.IsNullOrEmpty(path) && File.Exists(path))
-            {
-                try
-                {
-                    using (Image source = Image.FromFile(path))
-                        _altPreview = new Bitmap(source);
-                }
-                catch (Exception)
-                {
-                    _altPreview = null;
-                }
-            }
-
-            if (_altImageBox != null)
-            {
-                _altImageBox.SetImage(_altPreview, _altPreview == null
-                    ? "拖入异画卡图"
-                    : "拖入可替换");
-            }
-
-            UpdateAltArtHint();
-        }
-
-        private void DisposeAltArtPreview()
-        {
-            if (_altPreview == null)
-                return;
-
-            _altPreview.Dispose();
-            _altPreview = null;
+            AppendAltArtImages(e.Paths);
         }
 
         /// <summary>Status line of the 添加异画 block.</summary>
@@ -1556,23 +2390,60 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
-        /// After a successful save: the picked art is used up and the next free
-        /// letter is offered, so a second variant needs no retyping.
+        /// After a batch save: the images the writer accepted leave the queue,
+        /// the refused ones stay with the writer's reason and a red frame, so a
+        /// retry only needs a new letter for those rows.
         /// </summary>
-        public void NotifyAltArtSaved(string message)
+        public void NotifyAltArtsSaved(AltArtBatchResult result)
         {
-            SetStatus(message, false);
-            ApplyAltArtImage(null);
-            if (_altIdBox != null)
-                _altIdBox.Text = SuggestAltArtId();
-            UpdateAltArtHint();
+            if (result == null)
+                return;
+
+            SetStatus(result.Message, result.FailedCount > 0);
+            List<AltArtQueueItem> submitted = _altSubmitted;
+            _altSubmitted = null;
+
+            if (submitted == null)
+            {
+                RefreshAltArtQueue(SelectedAltArtIndex);
+                return;
+            }
+
+            int keep = -1;
+            for (int i = 0; i < submitted.Count; i++)
+            {
+                AltArtQueueItem item = submitted[i];
+                AltArtworkResult one = i < result.Results.Count
+                    ? result.Results[i]
+                    : null;
+
+                if (one != null && one.Success)
+                {
+                    if (_altQueue.Remove(item))
+                        item.Dispose();
+                    continue;
+                }
+
+                int at = _altQueue.IndexOf(item);
+                if (at < 0)
+                    continue;
+
+                item.Problem = one == null ? "保存失败" : one.Message;
+                if (keep < 0)
+                    keep = at;
+            }
+
+            RefreshAltArtQueue(keep >= 0
+                ? keep
+                : Math.Max(0, _altQueue.Count - 1));
         }
 
         /// <summary>
-        /// Collects 添加异画 into a request. Returns null and explains in the
-        /// footer when the number or the art is missing.
+        /// Collects the 添加异画 queue into one request per image, in the order
+        /// the images were added. Returns null and explains in the footer when
+        /// the card cannot take variants or the queue is empty.
         /// </summary>
-        public AltArtworkRequest ReadAltArt()
+        public IList<AltArtworkRequest> ReadAltArts()
         {
             if (_draft == null || _draft.IsNew ||
                 string.IsNullOrEmpty(AltArtBaseCardId) || !_altArtVisible)
@@ -1581,41 +2452,51 @@ namespace WeissDeckBuilder.UI
                 return null;
             }
 
-            string altId = _altIdBox.Text.Trim();
-            if (altId.Length == 0)
+            if (_altQueue.Count == 0)
             {
-                SetStatus("异画卡号不能为空，例如 " + AltArtBaseCardId + "a", true);
-                _altIdBox.Input.Focus();
+                SetStatus("先把异画卡图拖进 添加异画 的图片框（可以多选）", true);
+                if (_altImageBox != null)
+                    _altImageBox.Focus();
                 return null;
             }
 
-            if (string.IsNullOrEmpty(_altImagePath) || !File.Exists(_altImagePath))
+            var requests = new List<AltArtworkRequest>(_altQueue.Count);
+            for (int i = 0; i < _altQueue.Count; i++)
             {
-                SetStatus("先把异画卡图拖进 添加异画 的图片框", true);
-                _altImageBox.Focus();
-                return null;
+                AltArtQueueItem item = _altQueue[i];
+                string altId = (item.AltId ?? string.Empty).Trim();
+                if (altId.Length == 0)
+                {
+                    SetStatus("第 " + (i + 1) + " 张还没有异画卡号", true);
+                    RefreshAltArtQueue(i);
+                    if (_altIdBox != null)
+                        _altIdBox.Input.Focus();
+                    return null;
+                }
+
+                if (string.IsNullOrEmpty(item.SourcePath) ||
+                    !File.Exists(item.SourcePath))
+                {
+                    SetStatus("第 " + (i + 1) + " 张的卡图已经不在原处：" +
+                        item.SourcePath, true);
+                    RefreshAltArtQueue(i);
+                    return null;
+                }
+
+                var request = new AltArtworkRequest();
+                request.BaseCardId = AltArtBaseCardId;
+                request.Prefix = _draft.Prefix;
+                request.FolderPath = _draft.FolderPath;
+                request.FolderFullPath = _draft.FolderFullPath;
+                request.FileName = _draft.FileName;
+                request.AlternateArtworkRoot = AlternateArtworkRoot;
+                request.AltId = altId;
+                request.ImageSourcePath = item.SourcePath;
+                requests.Add(request);
             }
 
-            var request = new AltArtworkRequest();
-            request.BaseCardId = AltArtBaseCardId;
-            request.Prefix = _draft.Prefix;
-            request.FolderPath = _draft.FolderPath;
-            request.FolderFullPath = _draft.FolderFullPath;
-            request.FileName = _draft.FileName;
-            request.AlternateArtworkRoot = AlternateArtworkRoot;
-            request.AltId = altId;
-            request.ImageSourcePath = _altImagePath;
-            return request;
-        }
-
-        /// <summary>Puts the cursor in the 异画卡号 field of 添加异画.</summary>
-        public void FocusAltArtSection()
-        {
-            if (!_altArtVisible || _altIdBox == null)
-                return;
-
-            _altIdBox.Input.Focus();
-            _altIdBox.Input.SelectAll();
+            _altSubmitted = new List<AltArtQueueItem>(_altQueue);
+            return requests;
         }
 
         /// <summary>
@@ -1645,12 +2526,13 @@ namespace WeissDeckBuilder.UI
 
             TriggerIcon trigger = TriggerIcon.None;
             string triggerText = _triggerBox.Text.Trim();
-            if (triggerText.Length > 0 && !TryParseTrigger(triggerText, out trigger))
+            if (triggerText.Length > 0 &&
+                !TryParseTrigger(triggerText, Glossary, out trigger))
             {
                 if (error == null)
                 {
                     error = "触发无法识别：" + triggerText +
-                        "（例如 Soul / Book / Gate，留空表示无）";
+                        "（例如 书 / Book / Gate，留空表示无）";
                 }
             }
 
@@ -1681,8 +2563,7 @@ namespace WeissDeckBuilder.UI
             draft.Trait2 = _trait2Box.Text.Trim();
             draft.Trait3 = _trait3Box.Text.Trim();
             draft.Combo = _comboBox.Text.Trim();
-            draft.Text = _textBox.Text;
-            draft.EffectCode = _codeBox.Text;
+            ReadEffectRows(draft);
 
             // 事件 / 高潮 have no power; the writer drops the line anyway.
             if (draft.Category != CardCategory.Character)
@@ -1713,6 +2594,71 @@ namespace WeissDeckBuilder.UI
 
             _subtitleLabel.Text = BuildSubtitle();
             return draft;
+        }
+
+        /// <summary>
+        /// Reads the 效果 rows back into the draft: 效果内容 as one entry per
+        /// row (a row may hold several lines), the 效果 block each entry
+        /// belongs to, and 效果代码 as the ability blocks in row order. Keeping
+        /// all three in row order is what lets the writer put every `Text` line
+        /// back under its own block — including the row of a `*Shorthand`
+        /// whose 效果内容 stays empty.
+        /// The 简写提供 preview is not read: its text never becomes a `Text`
+        /// line, the shorthand adds it again on load.
+        /// </summary>
+        private void ReadEffectRows(CardEditorDraft draft)
+        {
+            var texts = new List<string>();
+            var codes = new List<string>();
+            var blocks = new List<int>();
+            int segmentsSeen = 0;
+            for (int i = 0; i < _effectRows.Count; i++)
+            {
+                string text = NormalizeEffectValue(_effectRows[i].Text.Text);
+                string code = NormalizeEffectValue(_effectRows[i].Code.Text);
+                if (text.Length == 0 && code.Length == 0)
+                    continue;
+
+                texts.Add(text);
+                if (code.Length > 0)
+                {
+                    codes.Add(code);
+                    segmentsSeen += CardEffectSplitter.SplitCode(code).Count;
+                }
+
+                // 这一行是第几段代码：代码框空着的行仍算上一段自己的内容。
+                blocks.Add(Math.Max(0, segmentsSeen - 1));
+            }
+
+            draft.Text = string.Join("\n", texts.ToArray());
+            draft.EffectCode = string.Join("\n", codes.ToArray());
+            draft.TextLines = texts.Count == 0 ? null : texts;
+
+            // 玩家看到并改过的是每一行自己的效果内容：读回来的文字按行序
+            // 重新对位，简写预览里的文字不算 `Text` 行。
+            draft.TextBlockIndexes = blocks.Count == 0 ? null : blocks;
+            draft.TextInherited = null;
+            draft.OriginalTextLines = null;
+        }
+
+        /// <summary>
+        /// CRLF from the native edit control back to the "\n" the parser and
+        /// the writer use, without the blank lines a box picks up on the way.
+        /// </summary>
+        private static string NormalizeEffectValue(string text)
+        {
+            string[] lines = CardDataWriter.SplitLines(text);
+            var parts = new List<string>();
+            int first = 0;
+            int last = lines.Length - 1;
+            while (first <= last && lines[first].Trim().Length == 0)
+                first++;
+            while (last >= first && lines[last].Trim().Length == 0)
+                last--;
+
+            for (int i = first; i <= last; i++)
+                parts.Add(lines[i].TrimEnd());
+            return string.Join("\n", parts.ToArray());
         }
 
         /// <summary>
@@ -1748,17 +2694,15 @@ namespace WeissDeckBuilder.UI
             return value;
         }
 
-        private static bool TryParseTrigger(string text, out TriggerIcon trigger)
+        /// <summary>
+        /// Parses the 触发 field: a number, an English enum name or a Chinese
+        /// name from <see cref="TriggerGlossary"/>. The card table always keeps
+        /// the English name, so what the user types only decides the enum.
+        /// </summary>
+        private static bool TryParseTrigger(string text, TriggerGlossary glossary,
+            out TriggerIcon trigger)
         {
-            int number;
-            if (int.TryParse(text, out number))
-            {
-                trigger = (TriggerIcon)number;
-                return number >= (int)TriggerIcon.None &&
-                    number <= (int)TriggerIcon.CustomIcon6;
-            }
-
-            return Enum.TryParse(text, true, out trigger);
+            return TriggerGlossary.TryParse(text, glossary, out trigger);
         }
 
         private void RestartReferenceSearch()

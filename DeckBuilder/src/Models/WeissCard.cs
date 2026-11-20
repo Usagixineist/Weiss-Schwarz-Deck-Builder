@@ -16,6 +16,51 @@ namespace WeissDeckBuilder.Models
         public string Text { get; set; }
 
         /// <summary>
+        /// 效果内容 as the block spells it: one entry per `Text` line. A card
+        /// with several 效果 has one entry per 效果, and a text that wraps on
+        /// the card keeps its line breaks inside its own entry. Search only
+        /// needs <see cref="Text"/>; 编辑卡片 uses this list to keep every
+        /// 效果内容 next to its own 效果代码.
+        /// </summary>
+        public List<string> TextLines { get; private set; }
+
+        /// <summary>
+        /// 效果内容 a `*Shorthand` copies in from CommonEffects.txt. 编辑卡片
+        /// shows them so the card face reads complete, but 保存 must not write
+        /// them back as `Text` lines: the shorthand adds them again on load, so
+        /// a saved card would show the same 效果 twice.
+        /// </summary>
+        public List<string> InheritedTextLines { get; private set; }
+
+        /// <summary>
+        /// 第 i 条 <see cref="TextLines"/> 属于第几段能力（`Act:` / `Auto:` /
+        /// `*Shorthand` 各开一段，按卡块里的顺序从 0 数起）。编辑卡片靠它把
+        /// 每条 `Text` 放回它自己的那段代码下面：只按“第几条文字”对位会在
+        /// 简写自带的文字插进来之后整体错位，把第二条效果的文字写到第一条
+        /// 的代码底下。
+        /// </summary>
+        public List<int> TextBlockIndexes { get; private set; }
+
+        /// <summary>
+        /// 第 i 条 <see cref="TextLines"/> 是不是 `*Shorthand` 从
+        /// CommonEffects.txt 带进来的正文。编辑卡片把它显示成只读预览，
+        /// 保存时不会写成 `Text` 行（简写每次读取都会把它再带进来）。
+        /// </summary>
+        public List<bool> TextInherited { get; private set; }
+
+        /// <summary>
+        /// 触发 a `*Shorthand` sets in CommonEffects.txt. A climax shorthand
+        /// such as `*2SoulClimax` writes `Trigger DoubleSoul`, so the card has
+        /// the icon even though its block carries no `Trigger` line. 编辑卡片
+        /// shows the value; 保存 keeps it out of the block, otherwise the same
+        /// tag would sit in the file twice.
+        /// </summary>
+        public TriggerIcon InheritedTrigger { get; set; }
+
+        /// <summary>颜色 a `*Shorthand` sets in CommonEffects.txt.</summary>
+        public CardColor InheritedColor { get; set; }
+
+        /// <summary>
         /// Raw ability code of the card: the ability header lines (Act / Auto /
         /// Event / ...) plus the braced block, exactly as written in
         /// CardData.txt. Search never needs it; 编辑卡片 shows it in the lower
@@ -71,6 +116,12 @@ namespace WeissDeckBuilder.Models
             Soul = 1;
             DeckLimit = 4;
             Traits = new string[] { string.Empty, string.Empty, string.Empty };
+            TextLines = new List<string>();
+            InheritedTextLines = new List<string>();
+            TextBlockIndexes = new List<int>();
+            TextInherited = new List<bool>();
+            InheritedTrigger = TriggerIcon.None;
+            InheritedColor = CardColor.Undefined;
             Clones = new List<WeissCard>();
         }
 
@@ -148,6 +199,18 @@ namespace WeissDeckBuilder.Models
             Soul = source.Soul;
             Text = source.Text;
             EffectCode = source.EffectCode ?? string.Empty;
+            TextLines.Clear();
+            if (source.TextLines != null)
+                TextLines.AddRange(source.TextLines);
+            InheritedTextLines.Clear();
+            if (source.InheritedTextLines != null)
+                InheritedTextLines.AddRange(source.InheritedTextLines);
+            TextBlockIndexes.Clear();
+            if (source.TextBlockIndexes != null)
+                TextBlockIndexes.AddRange(source.TextBlockIndexes);
+            TextInherited.Clear();
+            if (source.TextInherited != null)
+                TextInherited.AddRange(source.TextInherited);
             Traits[0] = source.Traits[0];
             Traits[1] = source.Traits[1];
             Traits[2] = source.Traits[2];

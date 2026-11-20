@@ -61,7 +61,10 @@ namespace WeissDeckBuilder.UI
             TextFormatFlags.NoPrefix;
 
         /// <summary>Fill of the popup, the panel colour of the detail layer.</summary>
-        private static readonly Color PanelColor = Color.FromArgb(23, 32, 49);
+        private static Color PanelColor
+        {
+            get { return AppTheme.TileBackground; }
+        }
 
         private readonly DeckDraftStore _store;
         private readonly Func<DeckDefinition, string> _coverPathProvider;
@@ -331,7 +334,7 @@ namespace WeissDeckBuilder.UI
                     graphics.FillRectangle(background, bounds);
             }
 
-            using (var dim = new SolidBrush(Color.FromArgb(178, 3, 8, 18)))
+            using (var dim = new SolidBrush(Color.FromArgb(178, AppTheme.Scrim)))
                 graphics.FillRectangle(dim, bounds);
         }
 
@@ -358,7 +361,7 @@ namespace WeissDeckBuilder.UI
             using (GraphicsPath path =
                 AppTheme.CreateRoundedRectangle(_panelBounds, PanelRadius))
             using (var fill = new SolidBrush(PanelColor))
-            using (var border = new Pen(Color.FromArgb(36, 48, 66)))
+            using (var border = new Pen(AppTheme.Border))
             {
                 graphics.FillPath(fill, path);
                 graphics.DrawPath(border, path);

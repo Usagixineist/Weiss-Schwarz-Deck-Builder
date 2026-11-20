@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
 using System.Windows.Forms;
+using WeissDeckBuilder.Data;
 using WeissDeckBuilder.Models;
 using WeissDeckBuilder.Search;
 
@@ -14,7 +15,7 @@ namespace WeissDeckBuilder.UI
     /// available in <see cref="WeissCard"/>. Clicking outside the popup, the
     /// close button, or pressing Escape dismisses it.
     /// </summary>
-    internal sealed class CardDetailOverlay : UserControl
+    internal sealed class CardDetailOverlay : UserControl, IThemeAware
     {
         private const int MaxPopupWidth = 1240;
         private const int MaxPopupHeight = 720;
@@ -106,14 +107,14 @@ namespace WeissDeckBuilder.UI
         private readonly Font _bodySmallFont;
         private readonly Font _stripNameFont;
         private readonly Font _hintFont;
-        private readonly SolidBrush _panelBrush;
-        private readonly SolidBrush _imageBackBrush;
-        private readonly SolidBrush _imageFrameBrush;
-        private readonly SolidBrush _boxBrush;
-        private readonly SolidBrush _selectionBrush;
-        private readonly SolidBrush _hoverBrush;
-        private readonly Pen _borderPen;
-        private readonly Pen _dividerPen;
+        private SolidBrush _panelBrush;
+        private SolidBrush _imageBackBrush;
+        private SolidBrush _imageFrameBrush;
+        private SolidBrush _boxBrush;
+        private SolidBrush _selectionBrush;
+        private SolidBrush _hoverBrush;
+        private Pen _borderPen;
+        private Pen _dividerPen;
 
         private WeissCard _card;
         private Bitmap _backdrop;
@@ -168,6 +169,13 @@ namespace WeissDeckBuilder.UI
         /// </summary>
         public Func<WeissCard, int, WeissCard> CardNavigation { get; set; }
 
+        /// <summary>
+        /// Chinese name table of the 触发 row. Without it the row shows the
+        /// English enum name the card table uses (Soul / Book / Gate …), which
+        /// is exactly what the editor accepts.
+        /// </summary>
+        public TriggerGlossary Glossary { get; set; }
+
         public CardDetailOverlay(ThumbnailCache thumbnails)
         {
             if (thumbnails == null)
@@ -199,19 +207,41 @@ namespace WeissDeckBuilder.UI
             _stripNameFont = CreateFont(8.5F, FontStyle.Regular);
             _hintFont = CreateFont(8.5F, FontStyle.Regular);
 
-            _panelBrush = new SolidBrush(Color.FromArgb(23, 32, 49));
-            _imageBackBrush = new SolidBrush(Color.FromArgb(10, 17, 31));
-            _imageFrameBrush = new SolidBrush(Color.FromArgb(5, 8, 15));
-            _boxBrush = new SolidBrush(Color.FromArgb(17, 27, 43));
-            _selectionBrush = new SolidBrush(Color.FromArgb(96, 59, 130, 246));
-            _hoverBrush = new SolidBrush(Color.FromArgb(38, 96, 165, 250));
-            _borderPen = new Pen(Color.FromArgb(36, 48, 66), 1F);
-            _dividerPen = new Pen(AppTheme.Divider);
+            CreateBrushes();
 
             _dragStrip = -1;
             _hoverSection = -1;
         }
 
+        /// <summary>
+        /// Brushes and pens are created once and reused on every paint, so a
+        /// palette swap has to rebuild them from the new colours.
+        /// </summary>
+        public void ApplyTheme()
+        {
+            _panelBrush.Dispose();
+            _imageBackBrush.Dispose();
+            _imageFrameBrush.Dispose();
+            _boxBrush.Dispose();
+            _selectionBrush.Dispose();
+            _hoverBrush.Dispose();
+            _borderPen.Dispose();
+            _dividerPen.Dispose();
+            CreateBrushes();
+            Invalidate();
+        }
+
+        private void CreateBrushes()
+        {
+            _panelBrush = new SolidBrush(AppTheme.TileBackground);
+            _imageBackBrush = new SolidBrush(AppTheme.InputBackground);
+            _imageFrameBrush = new SolidBrush(AppTheme.Scrim);
+            _boxBrush = new SolidBrush(AppTheme.InputBackground);
+            _selectionBrush = new SolidBrush(Color.FromArgb(96, AppTheme.Accent));
+            _hoverBrush = new SolidBrush(Color.FromArgb(38, AppTheme.AccentHover));
+            _borderPen = new Pen(AppTheme.Border, 1F);
+            _dividerPen = new Pen(AppTheme.Divider);
+        }
         public void ShowCard(WeissCard card, Bitmap backdrop)
         {
             if (card == null)
@@ -855,7 +885,7 @@ namespace WeissDeckBuilder.UI
                     graphics.FillRectangle(background, bounds);
             }
 
-            using (var dim = new SolidBrush(Color.FromArgb(178, 3, 8, 18)))
+            using (var dim = new SolidBrush(Color.FromArgb(178, AppTheme.Scrim)))
                 graphics.FillRectangle(dim, bounds);
         }
 
@@ -962,7 +992,9 @@ namespace WeissDeckBuilder.UI
                 : "—";
             string trigger = card.Trigger == TriggerIcon.None
                 ? "无"
-                : card.Trigger.ToString();
+                : (Glossary == null
+                    ? card.Trigger.ToString()
+                    : Glossary.GetName(card.Trigger));
             string deckLimit = card.DeckLimit > 0
                 ? card.DeckLimit.ToString()
                 : "—";
@@ -1344,7 +1376,7 @@ namespace WeissDeckBuilder.UI
         {
             Color fill = _closeHover
                 ? Color.FromArgb(220, 68, 68)
-                : Color.FromArgb(42, 56, 76);
+                : AppTheme.Divider;
             Color border = _closeHover
                 ? Color.FromArgb(248, 113, 113)
                 : AppTheme.Border;
@@ -1355,7 +1387,7 @@ namespace WeissDeckBuilder.UI
 
             int centerX = _closeBounds.Left + _closeBounds.Width / 2;
             int centerY = _closeBounds.Top + _closeBounds.Height / 2;
-            using (var crossPen = new Pen(Color.White, 1.8F))
+            using (var crossPen = new Pen(AppTheme.ForegroundOn(fill), 1.8F))
             {
                 crossPen.StartCap = LineCap.Round;
                 crossPen.EndCap = LineCap.Round;
@@ -1384,10 +1416,10 @@ namespace WeissDeckBuilder.UI
                 return;
 
             Color fill = !enabled
-                ? Color.FromArgb(28, 38, 55)
+                ? AppTheme.TileBackground
                 : hover
-                    ? Color.FromArgb(59, 130, 246)
-                    : Color.FromArgb(42, 56, 76);
+                    ? AppTheme.Accent
+                    : AppTheme.Divider;
             Color border = !enabled
                 ? AppTheme.Divider
                 : hover
@@ -1403,7 +1435,7 @@ namespace WeissDeckBuilder.UI
             int tipX = centerX + (direction < 0 ? -2 : 2);
             int tailX = centerX + (direction < 0 ? 3 : -3);
             using (var glyphPen = new Pen(
-                enabled ? Color.White : AppTheme.Placeholder, 1.8F))
+                enabled ? AppTheme.ForegroundOn(fill) : AppTheme.Placeholder, 1.8F))
             {
                 glyphPen.StartCap = LineCap.Round;
                 glyphPen.EndCap = LineCap.Round;

@@ -66,7 +66,7 @@ namespace WeissDeckBuilder.UI
             backLink.Dock = DockStyle.Fill;
             backLink.BackColor = Color.Transparent;
             backLink.LinkColor = AppTheme.TextSoft;
-            backLink.ActiveLinkColor = Color.White;
+            backLink.ActiveLinkColor = AppTheme.Text;
             backLink.VisitedLinkColor = AppTheme.TextSoft;
             backLink.DisabledLinkColor = AppTheme.TextMuted;
             backLink.LinkBehavior = LinkBehavior.HoverUnderline;
@@ -139,7 +139,7 @@ namespace WeissDeckBuilder.UI
             layout.Controls.Add(body, 0, 2);
 
             var footer = new Label();
-            footer.Text = "设置项暂为占位 · 关闭程序后不保留";
+            footer.Text = "所有设置写入 DeckBuilder\\settings.txt · 其余设置项为占位";
             footer.Dock = DockStyle.Fill;
             footer.ForeColor = AppTheme.TextMuted;
             footer.BackColor = Color.Transparent;
@@ -168,9 +168,9 @@ namespace WeissDeckBuilder.UI
             button.Height = SettingsCategoryRowHeight;
             button.CornerRadius = 10;
             button.NormalColor = Color.Transparent;
-            button.HoverColor = NavItemHoverColor;
-            button.PressedColor = NavItemPressedColor;
-            button.SelectedColor = NavItemHoverColor;
+            button.HoverColor = AppTheme.Divider;
+            button.PressedColor = AppTheme.Border;
+            button.SelectedColor = AppTheme.Divider;
             button.ForeColor = AppTheme.TextSoft;
             button.Font = _navSubItemFont;
             button.TextAlign = ContentAlignment.MiddleLeft;
@@ -182,29 +182,15 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
-        /// Shows one category page and highlights its entry. The pages are
-        /// built once, so switching only toggles visibility.
+        /// Marks one category as current, repaints its entry and scrolls the
+        /// shared body to that section. Every section lives in the same scroll
+        /// host now, so switching never hides a page.
         /// </summary>
         private void ShowSettingsCategory(int index)
         {
-            int count = _settingsCategoryPages == null
-                ? 0
-                : _settingsCategoryPages.Length;
-            if (count == 0)
-            {
-                _settingsCategory = Math.Max(0, index);
-                return;
-            }
-
-            int clamped = Math.Max(0, Math.Min(count - 1, index));
+            int clamped = Math.Max(0,
+                Math.Min(SettingsCategoryTitles.Length - 1, index));
             _settingsCategory = clamped;
-
-            for (int i = 0; i < count; i++)
-            {
-                Panel page = _settingsCategoryPages[i];
-                if (page != null)
-                    page.Visible = i == clamped;
-            }
 
             if (_settingsCategoryButtons != null)
             {
@@ -216,10 +202,12 @@ namespace WeissDeckBuilder.UI
 
                     bool active = i == clamped;
                     button.Selected = active;
-                    button.ForeColor = active ? Color.White : AppTheme.TextSoft;
+                    button.ForeColor = AppTheme.TextSoft;
                     button.Invalidate();
                 }
             }
+
+            ScrollSettingsToSection(clamped);
         }
 
         private void SettingsCategory_Click(object sender, EventArgs e)

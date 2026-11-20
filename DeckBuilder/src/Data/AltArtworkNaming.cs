@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace WeissDeckBuilder.Data
@@ -156,9 +157,23 @@ namespace WeissDeckBuilder.Data
         /// <summary>First alphabet letter that the directory does not use yet.</summary>
         public static char SuggestSuffix(string directory, string fileBasePrefix)
         {
+            return SuggestSuffix(directory, fileBasePrefix, null);
+        }
+
+        /// <summary>
+        /// Same, but the letters in <paramref name="reserved"/> are skipped too:
+        /// three images dropped at once become a、b、c instead of all asking for
+        /// `a` and then failing one by one while the batch writes them.
+        /// </summary>
+        public static char SuggestSuffix(string directory, string fileBasePrefix,
+            ISet<char> reserved)
+        {
             for (int i = 0; i < SuffixAlphabet.Length; i++)
             {
                 char candidate = SuffixAlphabet[i];
+                if (reserved != null && reserved.Contains(candidate))
+                    continue;
+
                 if (string.IsNullOrEmpty(directory) ||
                     !Directory.Exists(directory) ||
                     Directory.GetFiles(directory,

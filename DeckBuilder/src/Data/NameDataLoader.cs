@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using WeissDeckBuilder.Models;
 
 namespace WeissDeckBuilder.Data
 {
@@ -17,15 +18,45 @@ namespace WeissDeckBuilder.Data
             if (folder == null || folder.Cards.Count == 0)
                 return;
 
-            var names = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, string> names = LoadNames(folderFullPath);
+            ApplyTo(folder.Cards, 0, folder.Cards.Count, names);
+        }
+
+        /// <summary>
+        /// Reads JPNames.txt and NameData.txt once. 打开系列 applies the names in
+        /// two passes (before and after the extra rarities were appended), and
+        /// reading both files for each pass showed up as duplicate work.
+        /// </summary>
+        public static Dictionary<string, string> LoadNames(string folderFullPath)
+        {
+            var names = new Dictionary<string, string>(
+                StringComparer.OrdinalIgnoreCase);
+            if (string.IsNullOrEmpty(folderFullPath))
+                return names;
+
             LoadNameFile(Path.Combine(folderFullPath, "JPNames.txt"), names);
             LoadNameFile(Path.Combine(folderFullPath, "NameData.txt"), names);
-            if (names.Count == 0)
+            return names;
+        }
+
+        /// <summary>
+        /// Fills <see cref="WeissCard.JapaneseName"/> for the cards in
+        /// <paramref name="start"/> .. <paramref name="start"/> +
+        /// <paramref name="count"/> that do not have one yet.
+        /// </summary>
+        public static void ApplyTo(
+            IList<WeissCard> cards,
+            int start,
+            int count,
+            IDictionary<string, string> names)
+        {
+            if (cards == null || names == null || names.Count == 0)
                 return;
 
-            for (int i = 0; i < folder.Cards.Count; i++)
+            int end = Math.Min(cards.Count, start + count);
+            for (int i = Math.Max(0, start); i < end; i++)
             {
-                var card = folder.Cards[i];
+                WeissCard card = cards[i];
                 string name;
                 if (string.IsNullOrEmpty(card.JapaneseName) &&
                     (names.TryGetValue(card.Id, out name) ||

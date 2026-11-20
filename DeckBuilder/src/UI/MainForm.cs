@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
@@ -34,10 +34,6 @@ namespace WeissDeckBuilder.UI
         /// every list in the app scrolls the same way.
         /// </summary>
         private const int GridScrollbarGutter = 14;
-
-        private static readonly Color NavSurfaceColor = Color.FromArgb(31, 41, 55);
-        private static readonly Color NavItemHoverColor = Color.FromArgb(45, 57, 75);
-        private static readonly Color NavItemPressedColor = Color.FromArgb(75, 85, 99);
 
         /// <summary>
         /// Top level pages reachable from the sidebar. New feature pages only
@@ -152,6 +148,26 @@ namespace WeissDeckBuilder.UI
         private DeckImportOverlay _deckImportOverlay;
         private readonly ThumbnailCache _detailThumbnails;
 
+        /// <summary>
+        /// Chinese names of the triggers, shared by the 卡组信息 tables, the
+        /// detail overlay and the card editor. The card table keeps the English
+        /// names, so this is display only.
+        /// </summary>
+        private TriggerGlossary _triggerGlossary;
+
+        /// <summary>
+        /// Interface settings (currently just the theme), read from
+        /// DeckBuilder\settings.txt before the first control is built.
+        /// </summary>
+        private readonly AppSettings _appSettings;
+
+        /// <summary>
+        /// 设置页所有分类共用的那一个文件（DeckBuilder\settings.txt）：主题、触发
+        /// 名称，以后新增的类别也写它，所以备份或清理只需要动这一个文件。
+        /// </summary>
+        private readonly SettingsStore _settingsStore;
+
+
         private FlowLayoutPanel _sortChecks;
         private TableLayoutPanel _setChecks;
         private FlowLayoutPanel _levelChecks;
@@ -178,6 +194,16 @@ namespace WeissDeckBuilder.UI
             _detailThumbnails = new ThumbnailCache(32);
             _coverLocator = new SeriesCoverLocator(database.CardsRoot);
             _collection = new CollectionStore(database.DataRoot);
+            // 设置页的改动统一写进 DeckBuilder\settings.txt 这一个文件；第一次启动时
+            // 旧的 StreamingAssets\AppSettings.txt / TriggerGlossary.txt 会搬进来再删掉。
+            _settingsStore = SettingsStore.Open(database.DataRoot);
+            _triggerGlossary = new TriggerGlossary(_settingsStore);
+
+            // 主题必须先就位：BuildUi 里每个控件都直接从 AppTheme 取色，
+            // 先换配色表就不必等界面画好再重涂一遍。
+            _appSettings = new AppSettings(_settingsStore);
+            AppTheme.Apply(_appSettings.Theme);
+
             _navTitleFont = new Font("Microsoft YaHei UI", 14F,
                 FontStyle.Bold, GraphicsUnit.Point, 134);
             _navTitleCompactFont = new Font("Microsoft YaHei UI", 10.5F,
@@ -263,14 +289,14 @@ namespace WeissDeckBuilder.UI
         {
             var panel = new Panel();
             panel.Dock = DockStyle.Fill;
-            panel.BackColor = NavSurfaceColor;
+            panel.BackColor = AppTheme.Navigation;
             panel.Padding = new Padding(10, 12, 10, 10);
 
             _navLayout = new TableLayoutPanel();
             _navLayout.Dock = DockStyle.Fill;
             _navLayout.ColumnCount = 1;
             _navLayout.RowCount = 7;
-            _navLayout.BackColor = NavSurfaceColor;
+            _navLayout.BackColor = AppTheme.Navigation;
             _navLayout.Margin = new Padding(0);
             _navLayout.Padding = new Padding(0);
             _navLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, NavBrandRowHeight));
@@ -289,7 +315,7 @@ namespace WeissDeckBuilder.UI
             _navTitle = new Label();
             _navTitle.Text = "Weiss\nSchwarz";
             _navTitle.Dock = DockStyle.Fill;
-            _navTitle.ForeColor = Color.White;
+            _navTitle.ForeColor = AppTheme.Text;
             _navTitle.Font = _navTitleFont;
             _navTitle.Margin = new Padding(4, 0, 4, 0);
             _navTitle.TextAlign = ContentAlignment.MiddleLeft;
@@ -308,14 +334,14 @@ namespace WeissDeckBuilder.UI
             // settings row and footer never move when pages are added.
             _navScrollHost = new DarkScrollPanel();
             _navScrollHost.Dock = DockStyle.Fill;
-            _navScrollHost.BackColor = NavSurfaceColor;
+            _navScrollHost.BackColor = AppTheme.Navigation;
             _navScrollHost.Margin = new Padding(0);
             _navScrollHost.Padding = new Padding(0);
 
             _navItemsLayout = new TableLayoutPanel();
             _navItemsLayout.ColumnCount = 1;
             _navItemsLayout.RowCount = 0;
-            _navItemsLayout.BackColor = NavSurfaceColor;
+            _navItemsLayout.BackColor = AppTheme.Navigation;
             _navItemsLayout.Margin = new Padding(0);
             _navItemsLayout.Padding = new Padding(0);
             _navItemsLayout.ColumnStyles.Add(
@@ -326,7 +352,7 @@ namespace WeissDeckBuilder.UI
 
             var spacer = new Panel();
             spacer.Dock = DockStyle.Fill;
-            spacer.BackColor = NavSurfaceColor;
+            spacer.BackColor = AppTheme.Navigation;
             _navLayout.Controls.Add(spacer, 0, 3);
 
             // The series search / sort controls live in the sidebar block, so
@@ -360,8 +386,8 @@ namespace WeissDeckBuilder.UI
 
             // 编辑卡片 is the card authoring section: 修改卡片 browses a series
             // like 系列卡表 and opens the editor on a click, 添加卡片 starts a
-            // blank card right away, 添加异画 opens the same editor with the
-            // 添加异画 block of the clicked card ready. All sub entries only
+            // blank card right away. 添加异画 has no entry of its own: the block
+            // lives in the editor of every existing card. Both sub entries only
             // unfold while the section is open, exactly like the deck tools.
             _navCardEditButton = AddNavItem("编辑卡片", "写卡", "编辑卡片",
                 NavCardEditButton_Click);
@@ -369,8 +395,6 @@ namespace WeissDeckBuilder.UI
                 NavCardEditModifyButton_Click, true, NavSection.CardEdit);
             _navCardEditAddButton = AddNavItem("添加卡片", "添加", "添加卡片",
                 NavCardEditAddButton_Click, true, NavSection.CardEdit);
-            _navCardEditAltButton = AddNavItem("添加异画", "异画", "添加异画",
-                NavCardEditAltButton_Click, true, NavSection.CardEdit);
 
             // Both pinned entries live at the bottom of the sidebar: 启动游戏
             // starts the game with the noUpdate argument (the same thing
@@ -425,11 +449,11 @@ namespace WeissDeckBuilder.UI
             button.Dock = DockStyle.Fill;
             button.CornerRadius = 10;
             button.IconSize = 20;
-            button.SurfaceColor = NavSurfaceColor;
+            button.SurfaceColor = AppTheme.Navigation;
             button.NormalColor = Color.Transparent;
-            button.HoverColor = NavItemHoverColor;
-            button.PressedColor = NavItemPressedColor;
-            button.ActiveColor = NavItemHoverColor;
+            button.HoverColor = AppTheme.Divider;
+            button.PressedColor = AppTheme.Border;
+            button.ActiveColor = AppTheme.Divider;
             button.Font = _navItemFont;
             button.ForeColor = AppTheme.TextSoft;
             button.TextAlign = ContentAlignment.MiddleLeft;
@@ -480,11 +504,11 @@ namespace WeissDeckBuilder.UI
             button.AccessibleName = text;
             button.Dock = DockStyle.Fill;
             button.CornerRadius = 10;
-            button.SurfaceColor = NavSurfaceColor;
-            button.NormalColor = NavSurfaceColor;
-            button.HoverColor = NavItemHoverColor;
-            button.PressedColor = NavItemPressedColor;
-            button.SelectedColor = NavItemHoverColor;
+            button.SurfaceColor = AppTheme.Navigation;
+            button.NormalColor = AppTheme.Navigation;
+            button.HoverColor = AppTheme.Divider;
+            button.PressedColor = AppTheme.Border;
+            button.SelectedColor = AppTheme.Divider;
             button.ForeColor = AppTheme.TextSoft;
             button.Font = subItem ? _navSubItemFont : _navItemFont;
             button.TextAlign = ContentAlignment.MiddleLeft;
@@ -562,7 +586,7 @@ namespace WeissDeckBuilder.UI
                     continue;
 
                 button.Selected = active;
-                button.ForeColor = active ? Color.White : AppTheme.TextSoft;
+                button.ForeColor = AppTheme.TextSoft;
                 button.Invalidate();
             }
 
@@ -750,7 +774,7 @@ namespace WeissDeckBuilder.UI
             _backButton.Dock = DockStyle.Fill;
             _backButton.BackColor = Color.Transparent;
             _backButton.LinkColor = AppTheme.TextSoft;
-            _backButton.ActiveLinkColor = Color.White;
+            _backButton.ActiveLinkColor = AppTheme.Text;
             _backButton.VisitedLinkColor = AppTheme.TextSoft;
             _backButton.DisabledLinkColor = AppTheme.TextMuted;
             _backButton.LinkBehavior = LinkBehavior.HoverUnderline;
@@ -1411,9 +1435,12 @@ namespace WeissDeckBuilder.UI
 
             Cursor previousCursor = Cursor;
             Cursor = Cursors.WaitCursor;
+            long openMark = LoadProfiler.Mark();
             try
             {
-                SeriesDefinition series = _database.GetSeries(metadata.Name);
+                SeriesDefinition series;
+                using (LoadProfiler.Measure("OpenSeries", "GetSeries"))
+                    series = _database.GetSeries(metadata.Name);
                 if (series == null)
                 {
                     MessageBox.Show(this, "系列未找到：" + metadata.Name,
@@ -1432,7 +1459,8 @@ namespace WeissDeckBuilder.UI
 
                 // Opening another series always starts outside the marking
                 // mode; unsaved marks of the previous series are dropped.
-                ExitCollectionMarkMode();
+                using (LoadProfiler.Measure("OpenSeries", "ExitMarkMode"))
+                    ExitCollectionMarkMode();
 
                 // 编辑卡组 keeps one tray per series: reopening a series brings
                 // back the cards it stashed, another series starts empty.
@@ -1440,22 +1468,30 @@ namespace WeissDeckBuilder.UI
                     BeginDeckDraftForSeries(series);
 
                 _navColumnStyle.Width = NavCompactWidth;
-                _filterColumnStyle.Width = 250F;
-                _filterHost.Visible = true;
-                SetNavExpanded(false);
+                using (LoadProfiler.Measure("OpenSeries", "set filter width"))
+                    _filterColumnStyle.Width = 250F;
+                using (LoadProfiler.Measure("OpenSeries", "show filter host"))
+                    _filterHost.Visible = true;
+                using (LoadProfiler.Measure("OpenSeries", "SetNavExpanded"))
+                    SetNavExpanded(false);
                 SetDeckSubItemsVisible(false);
-                ShowContentPage(_browsePage);
+                using (LoadProfiler.Measure("OpenSeries", "ShowContentPage"))
+                    ShowContentPage(_browsePage);
                 // The card list of 写卡 folds its sub entries away (see above),
                 // so the section label carries the highlight there: a hidden
                 // sub entry cannot show the selected box.
-                SetActiveNavItem(deckPicker
-                    ? _navDeckButton
-                    : collection
-                        ? _navCollectionButton
-                        : cardEdit
-                            ? _navCardEditButton
-                            : _navSeriesButton);
-                ScheduleDarkChrome();
+                using (LoadProfiler.Measure("OpenSeries", "SetActiveNavItem"))
+                {
+                    SetActiveNavItem(deckPicker
+                        ? _navDeckButton
+                        : collection
+                            ? _navCollectionButton
+                            : cardEdit
+                                ? _navCardEditButton
+                                : _navSeriesButton);
+                }
+                using (LoadProfiler.Measure("OpenSeries", "ScheduleDarkChrome"))
+                    ScheduleDarkChrome();
 
                 string folderName = string.IsNullOrEmpty(series.FolderName)
                     ? series.Name
@@ -1474,19 +1510,23 @@ namespace WeissDeckBuilder.UI
                 _contentTitle.Text = deckPicker
                     ? "编辑卡组"
                     : cardEdit
-                        ? (_cardEditIntent == CardEditIntent.AltArt
-                            ? "添加异画"
-                            : "修改卡片")
+                        ? "修改卡片"
                         : series.Name;
                 _contentSubtitle.Text = folderName + " · 正在加载...";
 
-                PopulateSetFilter();
-                ResetFilters();
+                using (LoadProfiler.Measure("OpenSeries", "PopulateSetFilter"))
+                    PopulateSetFilter();
+                using (LoadProfiler.Measure("OpenSeries", "ResetFilters"))
+                    ResetFilters();
                 _filterBody.ScrollToTop();
-                _tileGrid.ConfigureCards();
-                RunSearch();
+                using (LoadProfiler.Measure("OpenSeries", "ConfigureCards"))
+                    _tileGrid.ConfigureCards();
+                using (LoadProfiler.Measure("OpenSeries", "RunSearch"))
+                    RunSearch();
                 UpdateNewDeckStripVisibility();
                 UpdateCollectionChrome();
+                LoadProfiler.Note("OpenSeries",
+                    "handed to the grid, " + series.Name, openMark, null);
             }
             catch (Exception ex)
             {
@@ -1727,34 +1767,61 @@ namespace WeissDeckBuilder.UI
 
         private void PopulateSetFilter()
         {
-            IList<string> setNames = _activeSeries == null
-                ? new List<string>()
-                : _database.GetSetNames(_activeSeries.Name);
+            IList<string> setNames;
+            using (LoadProfiler.Measure("PopulateSetFilter", "GetSetNames"))
+            {
+                setNames = _activeSeries == null
+                    ? new List<string>()
+                    : _database.GetSetNames(_activeSeries.Name);
+            }
 
             _populatingCombos = true;
             try
             {
                 _setChecks.SuspendLayout();
-                _setChecks.Controls.Clear();
+                // 复用已经存在的复选框，只有数量变多时才新建。每次重建整列
+                // 复选框要新建同样数量的窗口句柄，重新打开系列时这一项值 13 ms。
+                for (int i = _setChecks.Controls.Count - 1; i >= setNames.Count; i--)
+                    _setChecks.Controls.RemoveAt(i);
                 _setChecks.RowStyles.Clear();
 
                 int totalHeight = 0;
                 int rowCount = Math.Max(1, setNames.Count);
                 _setChecks.RowCount = rowCount;
-                for (int i = 0; i < setNames.Count; i++)
+                using (LoadProfiler.Measure("PopulateSetFilter",
+                    "create checks"))
                 {
-                    FilterCheckBox check = CreateFilterCheck(
-                        setNames[i], setNames[i], true);
-                    check.Margin = new Padding(0, 0, 0, 2);
-                    check.Width = 218;
-                    check.CheckedChanged += FilterCheck_CheckedChanged;
-                    _setChecks.Controls.Add(check, 0, i);
+                    for (int i = 0; i < setNames.Count; i++)
+                    {
+                        FilterCheckBox check = i < _setChecks.Controls.Count
+                            ? _setChecks.Controls[i] as FilterCheckBox
+                            : null;
+                        if (check == null)
+                        {
+                            check = CreateFilterCheck(
+                                setNames[i], setNames[i], true);
+                            check.Margin = new Padding(0, 0, 0, 2);
+                            check.Width = 218;
+                            check.CheckedChanged += FilterCheck_CheckedChanged;
+                            _setChecks.Controls.Add(check, 0, i);
+                        }
+                        else
+                        {
+                            // A reused box keeps the checked state of the set it
+                            // showed before; ResetFilters clears the filter right
+                            // after this anyway.
+                            if (check.Checked)
+                                check.Checked = false;
+                            check.Text = setNames[i];
+                            check.Tag = setNames[i];
+                        }
 
-                    int height = check.MeasureContentHeight(218);
-                    check.Height = height;
-                    totalHeight += height + 2;
-                    _setChecks.RowStyles.Add(
-                        new RowStyle(SizeType.Absolute, height + 2));
+                        int height = check.MeasureContentHeight(218);
+                        check.Height = height;
+                        totalHeight += height + 2;
+                        _setChecks.RowStyles.Add(
+                            new RowStyle(SizeType.Absolute, height + 2));
+                    }
                 }
 
                 if (setNames.Count == 0)
@@ -1764,13 +1831,19 @@ namespace WeissDeckBuilder.UI
                 }
 
                 _setChecks.Height = totalHeight;
-                _setChecks.ResumeLayout(true);
+                using (LoadProfiler.Measure("PopulateSetFilter",
+                    "setChecks layout"))
+                    _setChecks.ResumeLayout(true);
 
                 if (_setFilterGroup != null)
                 {
                     _setFilterGroup.Height = 26 + totalHeight + 2;
-                    _filterStack.PerformLayout();
-                    ScheduleDarkChrome();
+                    using (LoadProfiler.Measure("PopulateSetFilter",
+                        "stack layout"))
+                        _filterStack.PerformLayout();
+                    using (LoadProfiler.Measure("PopulateSetFilter",
+                        "dark chrome"))
+                        ScheduleDarkChrome();
                 }
             }
             finally
@@ -2021,7 +2094,7 @@ namespace WeissDeckBuilder.UI
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            DarkModeHelper.Apply(Handle);
+            DarkModeHelper.Apply(Handle, AppTheme.IsDark);
         }
 
         protected override void OnShown(EventArgs e)
@@ -2075,19 +2148,19 @@ namespace WeissDeckBuilder.UI
 
         private void ApplyDarkChrome()
         {
-            DarkModeHelper.Apply(Handle);
+            DarkModeHelper.Apply(Handle, AppTheme.IsDark);
             if (_tileGrid != null && _tileGrid.IsHandleCreated)
-                DarkModeHelper.Apply(_tileGrid.Handle);
+                DarkModeHelper.Apply(_tileGrid.Handle, AppTheme.IsDark);
             if (_deckLocalGrid != null && _deckLocalGrid.IsHandleCreated)
-                DarkModeHelper.Apply(_deckLocalGrid.Handle);
+                DarkModeHelper.Apply(_deckLocalGrid.Handle, AppTheme.IsDark);
             if (_deckDefaultGrid != null && _deckDefaultGrid.IsHandleCreated)
-                DarkModeHelper.Apply(_deckDefaultGrid.Handle);
+                DarkModeHelper.Apply(_deckDefaultGrid.Handle, AppTheme.IsDark);
             if (_deckCards != null && _deckCards.IsHandleCreated)
-                DarkModeHelper.Apply(_deckCards.Handle);
+                DarkModeHelper.Apply(_deckCards.Handle, AppTheme.IsDark);
             if (_filterBody != null && _filterBody.IsHandleCreated)
-                DarkModeHelper.Apply(_filterBody.Handle);
+                DarkModeHelper.Apply(_filterBody.Handle, AppTheme.IsDark);
             if (_filterStack != null && _filterStack.IsHandleCreated)
-                DarkModeHelper.Apply(_filterStack.Handle);
+                DarkModeHelper.Apply(_filterStack.Handle, AppTheme.IsDark);
         }
     }
 }

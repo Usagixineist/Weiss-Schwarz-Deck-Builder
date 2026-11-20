@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using WeissDeckBuilder.Infrastructure;
 using WeissDeckBuilder.Models;
 
 namespace WeissDeckBuilder.Data
@@ -33,9 +34,24 @@ namespace WeissDeckBuilder.Data
         public string Text { get; set; }
         public int Number { get; set; }
 
+        /// <summary>
+        /// 第几段能力（`Act:` / `Auto:` / `*Shorthand` 各开一段，按卡块里的
+        /// 顺序从 0 数起）。只有 `Text` 命令用到它，让每条卡面文字记住自己
+        /// 属于哪段代码；-1 表示文字排在第一条能力之前。
+        /// </summary>
+        public int BlockIndex { get; set; }
+
+        /// <summary>
+        /// True for 效果内容 a `*Shorthand` copies in from CommonEffects.txt.
+        /// 编辑卡片 shows it as a read-only preview; 保存 never writes it as a
+        /// `Text` line, because the shorthand adds it again on load.
+        /// </summary>
+        public bool Inherited { get; set; }
+
         public CardCommand()
         {
             Text = string.Empty;
+            BlockIndex = -1;
         }
     }
 
@@ -51,6 +67,15 @@ namespace WeissDeckBuilder.Data
         /// 效果代码 half of the effect box, so they must not be lost.
         /// </summary>
         public List<string> EffectLines { get; private set; }
+
+        /// <summary>
+        /// 触发 / 颜色 a `*Shorthand` sets in CommonEffects.txt (an old climax
+        /// shorthand already carries `Trigger DoubleSoul`). The card keeps them
+        /// apart from its own lines so 保存 does not write a tag the shorthand
+        /// puts there again on every load.
+        /// </summary>
+        public TriggerIcon? InheritedTrigger { get; set; }
+        public CardColor? InheritedColor { get; set; }
 
         public CardDefinition()
         {
@@ -68,6 +93,49 @@ namespace WeissDeckBuilder.Data
     /// </summary>
     public static class CardDataParser
     {
+        /// <summary>
+        /// Card field names. Parsing looks them up here instead of calling
+        /// key.ToLowerInvariant() on every line, which allocated one string per
+        /// line of every CardData.txt of a series.
+        /// </summary>
+        private static readonly Dictionary<string, CardCommandKind> CommandKinds =
+            CreateCommandKinds();
+
+        private static readonly string[] HeaderPrefixes =
+            { "Character:", "Event:", "Climax:" };
+
+        private static readonly CardCategory[] HeaderCategories =
+        {
+            CardCategory.Character,
+            CardCategory.Event,
+            CardCategory.Climax
+        };
+
+        private static Dictionary<string, CardCommandKind> CreateCommandKinds()
+        {
+            var kinds = new Dictionary<string, CardCommandKind>(
+                StringComparer.OrdinalIgnoreCase);
+            kinds["name"] = CardCommandKind.Name;
+            kinds["jpname"] = CardCommandKind.JapaneseName;
+            kinds["image"] = CardCommandKind.Image;
+            kinds["color"] = CardCommandKind.Color;
+            kinds["level"] = CardCommandKind.Level;
+            kinds["cost"] = CardCommandKind.Cost;
+            kinds["power"] = CardCommandKind.Power;
+            kinds["soul"] = CardCommandKind.Soul;
+            kinds["backup"] = CardCommandKind.Backup;
+            kinds["trigger"] = CardCommandKind.Trigger;
+            kinds["trait1"] = CardCommandKind.Trait1;
+            kinds["trait2"] = CardCommandKind.Trait2;
+            kinds["trait3"] = CardCommandKind.Trait3;
+            kinds["combo"] = CardCommandKind.Combo;
+            kinds["text"] = CardCommandKind.Text;
+            kinds["clone"] = CardCommandKind.Clone;
+            kinds["copy"] = CardCommandKind.Clone;
+            kinds["customtriggericon"] = CardCommandKind.CustomTriggerIcon;
+            return kinds;
+        }
+
         public static List<WeissCard> ParseFile(
             string path,
             SeriesFolder folder,
@@ -82,29 +150,37 @@ namespace WeissDeckBuilder.Data
                 return cards;
             }
 
-            List<CardDefinition> definitions = ReadDefinitions(path, commonEffects, warnings);
+            List<CardDefinition> definitions;
+            using (LoadProfiler.Measure("ParseFile",
+                "read " + Path.GetFileName(path)))
+                definitions = ReadDefinitions(path, commonEffects, warnings);
             var pending = new List<CardDefinition>(definitions);
 
-            while (pending.Count > 0)
+            using (LoadProfiler.Measure("ParseFile",
+                "materialize " + Path.GetFileName(path)))
             {
-                bool progress = false;
-                for (int i = 0; i < pending.Count; )
+                while (pending.Count > 0)
                 {
-                    WeissCard card = TryMaterialize(pending[i], cards, folder, false);
-                    if (card != null)
+                    bool progress = false;
+                    for (int i = 0; i < pending.Count; )
                     {
-                        cards.Add(card);
-                        pending.RemoveAt(i);
-                        progress = true;
+                        WeissCard card = TryMaterialize(pending[i], cards, folder,
+                            false);
+                        if (card != null)
+                        {
+                            cards.Add(card);
+                            pending.RemoveAt(i);
+                            progress = true;
+                        }
+                        else
+                        {
+                            i++;
+                        }
                     }
-                    else
-                    {
-                        i++;
-                    }
-                }
 
-                if (!progress)
-                    break;
+                    if (!progress)
+                        break;
+                }
             }
 
             for (int i = 0; i < pending.Count; i++)
@@ -132,6 +208,9 @@ namespace WeissDeckBuilder.Data
             var definitions = new List<CardDefinition>();
             CardDefinition current = null;
             int depth = 0;
+            // 第几段能力：`Act:` / `Auto:` 与 `*Shorthand` 各开一段，CardEffectSplitter
+            // 用同一条规则切代码，所以这里数出来的序号和编辑卡片里的“效果 N”对得上。
+            int blockIndex = -1;
 
             using (StreamReader reader = TextFileReader.Open(path))
             {
@@ -160,6 +239,7 @@ namespace WeissDeckBuilder.Data
                             current.Category = category;
                             definitions.Add(current);
                             depth = 0;
+                            blockIndex = -1;
                             continue;
                         }
                     }
@@ -200,7 +280,9 @@ namespace WeissDeckBuilder.Data
                         // The shorthand line stays in the effect code so 编辑卡片
                         // shows it and the writer can put it back untouched.
                         current.EffectLines.Add(line);
-                        ApplyShorthand(current, trimmed.Substring(1).Trim(), commonEffects);
+                        blockIndex++;
+                        ApplyShorthand(current, trimmed.Substring(1).Trim(),
+                            commonEffects, blockIndex);
                         continue;
                     }
 
@@ -208,66 +290,42 @@ namespace WeissDeckBuilder.Data
                     string key = space < 0 ? trimmed : trimmed.Substring(0, space);
                     string value = space < 0 ? string.Empty : trimmed.Substring(space + 1).Trim();
 
-                    switch (key.ToLowerInvariant())
+                    CardCommandKind kind;
+                    if (!CommandKinds.TryGetValue(key, out kind))
                     {
-                        case "name":
-                            AddTextCommand(current, CardCommandKind.Name, value);
-                            break;
-                        case "jpname":
-                            AddTextCommand(current, CardCommandKind.JapaneseName, value);
-                            break;
-                        case "image":
-                            AddTextCommand(current, CardCommandKind.Image, value);
-                            break;
-                        case "color":
+                        // Ability headers such as "Act: Rest 2 ..." or
+                        // "Auto: ..." are not card fields: they open the
+                        // effect tree and belong to 效果代码.
+                        current.EffectLines.Add(line);
+                        if (CardEffectSplitter.OpensSegment(line))
+                            blockIndex++;
+                        continue;
+                    }
+
+                    switch (kind)
+                    {
+                        case CardCommandKind.Color:
                             AddColorCommand(current, value);
                             break;
-                        case "level":
-                            AddNumberCommand(current, CardCommandKind.Level, value);
-                            break;
-                        case "cost":
-                            AddNumberCommand(current, CardCommandKind.Cost, value);
-                            break;
-                        case "power":
-                            AddNumberCommand(current, CardCommandKind.Power, value);
-                            break;
-                        case "soul":
-                            AddNumberCommand(current, CardCommandKind.Soul, value);
-                            break;
-                        case "backup":
-                            AddNumberCommand(current, CardCommandKind.Backup, value);
-                            break;
-                        case "trigger":
+                        case CardCommandKind.Trigger:
                             AddTriggerCommand(current, value);
                             break;
-                        case "trait1":
-                            AddTextCommand(current, CardCommandKind.Trait1, value);
+                        case CardCommandKind.Text:
+                            AddTextCommand(current, kind,
+                                CommonEffectLibrary.DecodeText(value), blockIndex);
                             break;
-                        case "trait2":
-                            AddTextCommand(current, CardCommandKind.Trait2, value);
-                            break;
-                        case "trait3":
-                            AddTextCommand(current, CardCommandKind.Trait3, value);
-                            break;
-                        case "combo":
-                            AddTextCommand(current, CardCommandKind.Combo, value);
-                            break;
-                        case "text":
-                            AddTextCommand(current, CardCommandKind.Text,
-                                CommonEffectLibrary.DecodeText(value));
-                            break;
-                        case "clone":
-                        case "copy":
-                            AddTextCommand(current, CardCommandKind.Clone, value);
-                            break;
-                        case "customtriggericon":
-                            AddNumberCommand(current, CardCommandKind.CustomTriggerIcon, value);
+                        case CardCommandKind.Level:
+                        case CardCommandKind.Cost:
+                        case CardCommandKind.Power:
+                        case CardCommandKind.Soul:
+                        case CardCommandKind.Backup:
+                        case CardCommandKind.CustomTriggerIcon:
+                            AddNumberCommand(current, kind, value);
                             break;
                         default:
-                            // Ability headers such as "Act: Rest 2 ..." or
-                            // "Auto: ..." are not card fields: they open the
-                            // effect tree and belong to 效果代码.
-                            current.EffectLines.Add(line);
+                            // Name / JpName / Image / Trait1-3 / Combo / Clone
+                            // all keep their value verbatim.
+                            AddTextCommand(current, kind, value);
                             break;
                     }
                 }
@@ -284,20 +342,13 @@ namespace WeissDeckBuilder.Data
             category = CardCategory.Character;
             id = string.Empty;
 
-            string[] prefixes = { "Character:", "Event:", "Climax:" };
-            CardCategory[] categories =
+            for (int i = 0; i < HeaderPrefixes.Length; i++)
             {
-                CardCategory.Character,
-                CardCategory.Event,
-                CardCategory.Climax
-            };
-
-            for (int i = 0; i < prefixes.Length; i++)
-            {
-                if (line.StartsWith(prefixes[i], StringComparison.OrdinalIgnoreCase))
+                string prefix = HeaderPrefixes[i];
+                if (line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 {
-                    category = categories[i];
-                    id = line.Substring(prefixes[i].Length).Trim();
+                    category = HeaderCategories[i];
+                    id = line.Substring(prefix.Length).Trim();
                     return id.Length > 0;
                 }
             }
@@ -308,7 +359,8 @@ namespace WeissDeckBuilder.Data
         private static void ApplyShorthand(
             CardDefinition current,
             string effectName,
-            CommonEffectLibrary commonEffects)
+            CommonEffectLibrary commonEffects,
+            int blockIndex)
         {
             if (commonEffects == null || effectName.Length == 0)
                 return;
@@ -319,19 +371,23 @@ namespace WeissDeckBuilder.Data
 
             if (definition.Color.HasValue)
             {
+                current.InheritedColor = definition.Color;
                 current.Commands.Add(new CardCommand
                 {
                     Kind = CardCommandKind.Color,
-                    Number = (int)definition.Color.Value
+                    Number = (int)definition.Color.Value,
+                    BlockIndex = blockIndex
                 });
             }
 
             if (definition.Trigger.HasValue)
             {
+                current.InheritedTrigger = definition.Trigger;
                 current.Commands.Add(new CardCommand
                 {
                     Kind = CardCommandKind.Trigger,
-                    Number = (int)definition.Trigger.Value
+                    Number = (int)definition.Trigger.Value,
+                    BlockIndex = blockIndex
                 });
             }
 
@@ -340,7 +396,9 @@ namespace WeissDeckBuilder.Data
                 current.Commands.Add(new CardCommand
                 {
                     Kind = CardCommandKind.Text,
-                    Text = definition.TextLines[i]
+                    Text = definition.TextLines[i],
+                    BlockIndex = blockIndex,
+                    Inherited = true
                 });
             }
         }
@@ -348,12 +406,14 @@ namespace WeissDeckBuilder.Data
         private static void AddTextCommand(
             CardDefinition current,
             CardCommandKind kind,
-            string value)
+            string value,
+            int blockIndex = -1)
         {
             current.Commands.Add(new CardCommand
             {
                 Kind = kind,
-                Text = value ?? string.Empty
+                Text = value ?? string.Empty,
+                BlockIndex = blockIndex
             });
         }
 
@@ -485,7 +545,7 @@ namespace WeissDeckBuilder.Data
                         card.Combo = command.Text;
                         break;
                     case CardCommandKind.Text:
-                        AppendText(card, command.Text);
+                        AppendText(card, command);
                         break;
                     case CardCommandKind.Clone:
                         WeissCard baseCard = FindCard(existingCards, command.Text);
@@ -497,11 +557,25 @@ namespace WeissDeckBuilder.Data
                 }
             }
 
+            // A `*Shorthand` fills the same 效果内容 into Text/TextLines; the
+            // card remembers which pieces came from CommonEffects.txt (the
+            // `Inherited` flag of each `Text` command, added by AppendText) so
+            // the writer never turns them into `Text` lines of its own.
+
+            // The 触发 / 颜色 a shorthand sets are remembered the same way: the
+            // editor shows them, but a saved block must not spell them out a
+            // second time.
+            if (definition.InheritedTrigger.HasValue)
+                card.InheritedTrigger = definition.InheritedTrigger.Value;
+            if (definition.InheritedColor.HasValue)
+                card.InheritedColor = definition.InheritedColor.Value;
+
             return card;
         }
 
-        private static void AppendText(WeissCard card, string text)
+        private static void AppendText(WeissCard card, CardCommand command)
         {
+            string text = command == null ? null : command.Text;
             if (string.IsNullOrEmpty(text))
                 return;
 
@@ -509,6 +583,15 @@ namespace WeissDeckBuilder.Data
                 card.Text = text;
             else
                 card.Text = card.Text + "\n" + text;
+            card.TextLines.Add(text);
+
+            // 每条 `Text` 记住自己属于哪段能力、是不是简写带进来的正文：
+            // 编辑卡片靠这两个标记把文字放回自己的代码下面，并只把玩家自己的
+            // 文字写回卡块。
+            card.TextBlockIndexes.Add(command.BlockIndex < 0 ? 0 : command.BlockIndex);
+            card.TextInherited.Add(command.Inherited);
+            if (command.Inherited)
+                card.InheritedTextLines.Add(text);
         }
 
         internal static WeissCard FindCard(List<WeissCard> cards, string id)

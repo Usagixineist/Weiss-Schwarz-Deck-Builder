@@ -1,8 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Windows.Forms;
+using WeissDeckBuilder.Data;
+using WeissDeckBuilder.Models;
 
 namespace WeissDeckBuilder.UI
 {
@@ -23,13 +24,67 @@ namespace WeissDeckBuilder.UI
         private const int SettingsCategoryCaptionHeight = 28;
         private const int SettingsCategoryRowHeight = 40;
         private const int SettingsCategoryWidth = 218;
-        private const int SettingsCardRowHeight = 100;
+
+        /// <summary>
+        /// The body is one long scroll: the four categories are stacked top to
+        /// bottom, a section header is what the sidebar jumps to, and a single
+        /// setting is a title line over a hint line. Every height is absolute,
+        /// so the list reports its own size without measuring any text.
+        /// </summary>
+        private const int SettingsSectionHeaderHeight = 62;
+        private const int SettingsItemTitleHeight = 24;
+        private const int SettingsItemHintHeight = 34;
+        private const int SettingsItemHeight =
+            SettingsItemTitleHeight + SettingsItemHintHeight;
+        private const int SettingsCardPackHintHeight = 40;
+        private const int SettingsCardPackButtonHeight = 36;
+        private const int SettingsCardPackItemHeight =
+            SettingsItemTitleHeight + SettingsCardPackHintHeight +
+            SettingsCardPackButtonHeight;
+
+        /// <summary>
+        /// Height of the 主题 row: the title, the hint and the two buttons that
+        /// pick the palette. Same metrics as the card pack row, so 外观 and
+        /// 存储 line up.
+        /// </summary>
+        private const int SettingsThemeItemHeight =
+            SettingsItemTitleHeight + SettingsItemHintHeight +
+            SettingsCardPackButtonHeight;
+
+        /// <summary>
+        /// Hint under 主题. It is put back after a successful save, so a failed
+        /// write does not leave its error sitting on the line for good.
+        /// </summary>
+        private const string ThemeHintText =
+            "切换后立即生效，并写入 DeckBuilder\\settings.txt 供下次启动沿用；" +
+            "删掉该文件即恢复深色主题。";
+        private const int SettingsNoteHeight = 26;
+        private const int SettingsSectionGapHeight = 20;
+        private const int SettingsScrollbarReserve = 12;
+
+        /// <summary>
+        /// A jump leaves this many pixels above the section header, so the
+        /// header does not sit flush against the top of the viewport.
+        /// </summary>
+        private const int SettingsScrollAnchorBias = 8;
 
         /// <summary>
         /// Index of the 存储 category. It is the only category with a working
         /// action so far: installing a card pack archive.
         /// </summary>
         private const int CardPackSettingsCategory = 2;
+
+        /// <summary>
+        /// Index of the 术语 category. It holds the editable 触发名称 table, the
+        /// only working option outside 存储.
+        /// </summary>
+        private const int TerminologySettingsCategory = 1;
+
+        /// <summary>
+        /// Index of the 外观 category. It holds the only setting that writes to
+        /// settings.txt: the 深色 / 浅色 theme switch.
+        /// </summary>
+        private const int AppearanceSettingsCategory = 0;
 
         // Category order of the second level settings sidebar. The buttons and
         // the body pages are built from these arrays, so adding a category
@@ -48,9 +103,25 @@ namespace WeissDeckBuilder.UI
         };
 
         private Panel _settingsSidebarHost;
-        private Panel[] _settingsCategoryPages;
+        private DarkScrollPanel _settingsScroll;
+        private TableLayoutPanel _settingsContent;
+        private int _settingsContentHeight;
+        private int[] _settingsSectionTops;
+        private int _settingsScrollTarget;
+        private bool _settingsScrollPending;
         private List<RoundedButton> _settingsCategoryButtons;
         private int _settingsCategory;
+
+        /// <summary>The two 深色 / 浅色 buttons of the 主题 setting.</summary>
+        private RoundedButton _themeDarkButton;
+        private RoundedButton _themeLightButton;
+
+        /// <summary>
+        /// Hint line of the 主题 setting. It is reused to print the reason when
+        /// the settings file cannot be written.
+        /// </summary>
+        private Label _themeHintLabel;
+
 
         /// <summary>
         /// Settings entry point: the main rail folds to its compact form and
@@ -88,9 +159,11 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
-        /// Container of the four category pages. The sidebar only swaps which
-        /// child is visible, so every category is built once and keeps its
-        /// state while the user jumps between them.
+        /// The settings body: every category stacked inside one scroll host, so
+        /// the page slides from 外观 down to 软件信息 with a single bar. The
+        /// categories used to be separate pages swapped by visibility; they are
+        /// sections of the same list now and the sidebar only scrolls to the
+        /// one it clicked.
         /// </summary>
         private Panel BuildSettingsPage()
         {
@@ -99,101 +172,242 @@ namespace WeissDeckBuilder.UI
             page.BackColor = AppTheme.MainBackground;
             page.Visible = false;
 
-            _settingsCategoryPages = new Panel[SettingsCategoryTitles.Length];
-            for (int i = 0; i < SettingsCategoryTitles.Length; i++)
-            {
-                Panel categoryPage = BuildSettingsCategoryPage(i);
-                categoryPage.Dock = DockStyle.Fill;
-                categoryPage.Visible = i == 0;
-                page.Controls.Add(categoryPage);
-                _settingsCategoryPages[i] = categoryPage;
-            }
+            _settingsScroll = new DarkScrollPanel();
+            _settingsScroll.Dock = DockStyle.Fill;
+            _settingsScroll.Margin = new Padding(0);
+            _settingsScroll.ScrollbarReserve = SettingsScrollbarReserve;
+
+            _settingsContent = new TableLayoutPanel();
+            _settingsContent.ColumnCount = 1;
+            _settingsContent.BackColor = Color.Transparent;
+            _settingsContent.Margin = new Padding(0);
+            // The inset lives on the list instead of on every card, so the flat
+            // rows line up on one left edge.
+            _settingsContent.Padding = new Padding(20, 4, 16, 24);
+            _settingsContent.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100F));
+
+            BuildSettingsSections();
+
+            _settingsScroll.Content = _settingsContent;
+            _settingsScroll.SizeChanged +=
+                delegate { ApplySettingsScrollTarget(); };
+            page.Controls.Add(_settingsScroll);
 
             ShowSettingsCategory(_settingsCategory);
             return page;
         }
 
         /// <summary>
-        /// One category of the settings body: the shared page header plus the
-        /// placeholder cards of that category. Real options will replace the
-        /// cards one by one without touching the surrounding layout.
+        /// Stacks the four categories into the single list and remembers where
+        /// each section starts. A section is its header, the working table of
+        /// the category (if it has one), one flat row per setting, then the
+        /// note that says what is still a placeholder.
         /// </summary>
-        private Panel BuildSettingsCategoryPage(int category)
+        private void BuildSettingsSections()
         {
-            var page = new Panel();
-            page.Dock = DockStyle.Fill;
-            page.BackColor = AppTheme.MainBackground;
-            page.Margin = new Padding(0);
+            _settingsSectionTops = new int[SettingsCategoryTitles.Length];
+            _settingsContentHeight = 0;
 
-            var layout = new TableLayoutPanel();
-            layout.Dock = DockStyle.Fill;
-            layout.ColumnCount = 1;
-            layout.RowCount = 2;
-            layout.BackColor = AppTheme.MainBackground;
-            layout.Margin = new Padding(0);
-            layout.Padding = new Padding(0);
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 62F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-
-            Label titleLabel;
-            Label subtitleLabel;
-            layout.Controls.Add(CreatePageHeader(
-                SettingsCategoryTitles[category],
-                SettingsCategorySubtitles[category],
-                out titleLabel, out subtitleLabel), 0, 0);
-
-            List<string[]> cards = SettingsCardsFor(category);
-
-            // 存储页第一行是真实可用的入口，其余分类仍然是占位卡片。
-            int firstRow = 0;
-            var body = new TableLayoutPanel();
-            body.Dock = DockStyle.Fill;
-            body.ColumnCount = 1;
-            body.RowCount = cards.Count + 1;
-            body.BackColor = AppTheme.MainBackground;
-            body.Margin = new Padding(0);
-            body.Padding = new Padding(0);
-            body.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-
-            if (category == CardPackSettingsCategory)
+            for (int category = 0; category < SettingsCategoryTitles.Length;
+                category++)
             {
-                body.RowStyles.Add(new RowStyle(SizeType.Absolute, 132F));
-                body.Controls.Add(CreateCardPackCard(), 0, 0);
-                firstRow = 1;
-            }
-            body.RowCount = cards.Count + firstRow + 1;
+                _settingsSectionTops[category] = _settingsContentHeight;
 
-            for (int i = 0; i < cards.Count; i++)
-            {
-                body.RowStyles.Add(
-                    new RowStyle(SizeType.Absolute, SettingsCardRowHeight));
-                body.Controls.Add(
-                    CreatePlaceholderCard(cards[i][0], cards[i][1]), 0, i + firstRow);
+                Label titleLabel;
+                Label subtitleLabel;
+                AppendSettingsRow(CreatePageHeader(
+                    SettingsCategoryTitles[category],
+                    SettingsCategorySubtitles[category],
+                    out titleLabel, out subtitleLabel),
+                    SettingsSectionHeaderHeight);
+
+                if (category == TerminologySettingsCategory)
+                    AppendTriggerGlossarySection();
+                else if (category == CardPackSettingsCategory)
+                    AppendSettingsRow(CreateCardPackItem(),
+                        SettingsCardPackItemHeight);
+                else if (category == AppearanceSettingsCategory)
+                    AppendSettingsRow(CreateThemeItem(),
+                        SettingsThemeItemHeight);
+
+                List<string[]> items = SettingsCardsFor(category);
+                for (int i = 0; i < items.Count; i++)
+                    AppendSettingsRow(
+                        CreateSettingsItem(items[i][0], items[i][1]),
+                        SettingsItemHeight);
+
+                AppendSettingsRow(CreateSettingsNote(SectionNoteFor(category)),
+                    SettingsNoteHeight);
+
+                if (category < SettingsCategoryTitles.Length - 1)
+                    AppendSettingsRow(CreateSettingsSpacer(),
+                        SettingsSectionGapHeight);
             }
 
-            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            _settingsContent.Height = _settingsContentHeight;
+        }
 
+        /// <summary>
+        /// Adds one fixed height row and grows the recorded total, so the list
+        /// knows its own height before it is ever shown and the scroll host can
+        /// clamp to it without measuring a single label.
+        /// </summary>
+        private void AppendSettingsRow(Control control, int height)
+        {
+            int row = _settingsContent.RowCount;
+            _settingsContent.RowCount = row + 1;
+            _settingsContent.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, height));
+            _settingsContent.Controls.Add(control, 0, row);
+            _settingsContentHeight += height;
+        }
+
+        /// <summary>
+        /// Scrolls the body so the section of the clicked category starts at
+        /// the top of the viewport. The anchors were recorded while the
+        /// sections were built, so no control has to be laid out first.
+        /// </summary>
+        private void ScrollSettingsToSection(int index)
+        {
+            if (_settingsSectionTops == null || index < 0 ||
+                index >= _settingsSectionTops.Length)
+                return;
+
+            _settingsScrollTarget = Math.Max(0,
+                _settingsSectionTops[index] - SettingsScrollAnchorBias);
+            _settingsScrollPending = _settingsScroll != null;
+            ApplySettingsScrollTarget();
+        }
+
+        /// <summary>
+        /// Applies (and forgets) the pending jump. The first jump runs before
+        /// the page has a size, where the offset would clamp to zero, so the
+        /// target stays pending until the host reports a real height once.
+        /// </summary>
+        private void ApplySettingsScrollTarget()
+        {
+            if (!_settingsScrollPending || _settingsScroll == null)
+                return;
+
+            if (_settingsScroll.ClientSize.Height <= 0)
+                return;
+
+            _settingsScrollPending = false;
+            _settingsScroll.ScrollTo(_settingsScrollTarget);
+        }
+
+        /// <summary>
+        /// One flat setting: the title line over a muted hint, painted straight
+        /// on the page. Settings used to sit in rounded cards; the frame is
+        /// gone, so nothing draws a border around a single option any more.
+        /// </summary>
+        private TableLayoutPanel CreateSettingsItem(string title,
+            string description)
+        {
+            TableLayoutPanel item = CreateSettingsItemHost(2);
+            item.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, SettingsItemTitleHeight));
+            item.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            item.Controls.Add(CreateSettingsTitleLabel(title), 0, 0);
+            item.Controls.Add(CreateSettingsHintLabel(description), 0, 1);
+            return item;
+        }
+
+        /// <summary>
+        /// Empty single column grid for a flat settings block. The caller adds
+        /// the absolute row heights so the list total stays predictable.
+        /// </summary>
+        private TableLayoutPanel CreateSettingsItemHost(int rowCount)
+        {
+            var item = new TableLayoutPanel();
+            item.Dock = DockStyle.Fill;
+            item.ColumnCount = 1;
+            item.RowCount = rowCount;
+            item.BackColor = Color.Transparent;
+            item.Margin = new Padding(0);
+            item.Padding = new Padding(0);
+            item.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
+            return item;
+        }
+
+        /// <summary>Bold title line of one flat setting.</summary>
+        private Label CreateSettingsTitleLabel(string text)
+        {
+            var label = new Label();
+            label.Text = text;
+            label.Dock = DockStyle.Fill;
+            label.ForeColor = AppTheme.Text;
+            label.BackColor = Color.Transparent;
+            label.Font = _settingsTitleFont;
+            label.TextAlign = ContentAlignment.MiddleLeft;
+            label.Margin = new Padding(0);
+            return label;
+        }
+
+        /// <summary>
+        /// Muted hint under a title. The label is not auto sized, so a long
+        /// sentence wraps inside its row instead of widening the list.
+        /// </summary>
+        private Label CreateSettingsHintLabel(string text)
+        {
+            var label = new Label();
+            label.Text = text;
+            label.Dock = DockStyle.Fill;
+            label.ForeColor = AppTheme.TextMuted;
+            label.BackColor = Color.Transparent;
+            label.Font = _settingsHintFont;
+            label.TextAlign = ContentAlignment.TopLeft;
+            label.Margin = new Padding(0);
+            return label;
+        }
+
+        /// <summary>Closing line of a section: what is still a placeholder.</summary>
+        private Control CreateSettingsNote(string text)
+        {
             var note = new Label();
-            note.Text = firstRow == 0
-                ? "以上设置项均为占位，具体选项将在后续版本开放。"
-                : "卡表压缩包可直接拖到窗口安装；以上其余设置项为占位。";
+            note.Text = text;
             note.Dock = DockStyle.Fill;
             note.ForeColor = AppTheme.TextMuted;
             note.BackColor = Color.Transparent;
             note.Font = _settingsHintFont;
             note.TextAlign = ContentAlignment.TopLeft;
-            note.Margin = new Padding(2, 0, 0, 0);
-            body.Controls.Add(note, 0, cards.Count + firstRow);
+            note.Margin = new Padding(4, 0, 0, 0);
+            return note;
+        }
 
-            layout.Controls.Add(body, 0, 1);
-            page.Controls.Add(layout);
-            return page;
+        /// <summary>Breathing room between two sections of the single list.</summary>
+        private static Control CreateSettingsSpacer()
+        {
+            var spacer = new Panel();
+            spacer.Dock = DockStyle.Fill;
+            spacer.BackColor = Color.Transparent;
+            spacer.Margin = new Padding(0);
+            return spacer;
         }
 
         /// <summary>
-        /// Placeholder cards of one category: a title plus the one line hint
-        /// underneath. The order matches the sidebar entries built from
+        /// Note of one category, mirroring the placeholder text that category
+        /// used to carry at the bottom of its own page.
+        /// </summary>
+        private static string SectionNoteFor(int category)
+        {
+            switch (category)
+            {
+                case CardPackSettingsCategory:
+                    return "卡表压缩包可直接拖到窗口安装；以上其余设置项为占位。";
+                case TerminologySettingsCategory:
+                    return "触发名称只改界面显示，卡表与导出的卡组始终写英文名；以上其余设置项为占位。";
+                default:
+                    return category == AppearanceSettingsCategory
+                        ? "主题已可切换并会写入 DeckBuilder\\settings.txt；以上其余设置项为占位，将在后续版本开放。"
+                        : "以上设置项均为占位，具体选项将在后续版本开放。";
+            }
+        }
+
+        /// <summary>
+        /// Placeholder settings of one category: a title plus the one line hint
+        /// under it. The order matches the sidebar entries built from
         /// <see cref="SettingsCategoryTitles"/>.
         /// </summary>
         private static List<string[]> SettingsCardsFor(int category)
@@ -203,11 +417,6 @@ namespace WeissDeckBuilder.UI
             switch (category)
             {
                 case 0:
-                    cards.Add(new[]
-                    {
-                        "主题",
-                        "深色主题固定启用；浅色与跟随系统主题将在后续版本开放。"
-                    });
                     cards.Add(new[]
                     {
                         "界面密度",
@@ -220,11 +429,6 @@ namespace WeissDeckBuilder.UI
                     });
                     break;
                 case 1:
-                    cards.Add(new[]
-                    {
-                        "术语对照",
-                        "费用、灵魂、力量、触发等术语的中日对照表将在此展示。"
-                    });
                     cards.Add(new[]
                     {
                         "关键词提示",
@@ -271,119 +475,175 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
-        /// The one working card of 存储: installs a card pack archive picked
-        /// through the file dialog. Dropping a card-pack archive anywhere on the window
-        /// does the same, so the description mentions both ways.
+        /// The one working setting of 外观: a 深色 and a 浅色 button. Pressing one
+        /// repaints the whole window from the other palette and writes the choice
+        /// to settings.txt, so the next start opens in the same theme.
         /// </summary>
-        private Panel CreateCardPackCard()
+        private TableLayoutPanel CreateThemeItem()
         {
-            var card = new Panel();
-            card.Dock = DockStyle.Fill;
-            card.BackColor = AppTheme.TileBackground;
-            card.Margin = new Padding(0, 0, 0, 12);
-            card.Padding = new Padding(16, 10, 16, 12);
+            TableLayoutPanel item = CreateSettingsItemHost(3);
+            item.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, SettingsItemTitleHeight));
+            item.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, SettingsItemHintHeight));
+            item.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, SettingsCardPackButtonHeight));
 
-            var layout = new TableLayoutPanel();
-            layout.Dock = DockStyle.Fill;
-            layout.ColumnCount = 2;
-            layout.RowCount = 2;
-            layout.BackColor = Color.Transparent;
-            layout.Margin = new Padding(0);
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 132F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-            layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+            // The row is flat like every other setting, so the two buttons
+            // paint straight on the page colour instead of on a card.
+            var buttons = new FlowLayoutPanel();
+            buttons.Dock = DockStyle.Fill;
+            buttons.FlowDirection = FlowDirection.LeftToRight;
+            buttons.WrapContents = false;
+            buttons.BackColor = AppTheme.MainBackground;
+            buttons.Margin = new Padding(0);
+            buttons.Padding = new Padding(0);
 
-            var titleLabel = new Label();
-            titleLabel.Text = "卡表压缩包";
-            titleLabel.Dock = DockStyle.Fill;
-            titleLabel.ForeColor = AppTheme.Text;
-            titleLabel.BackColor = Color.Transparent;
-            titleLabel.Font = _settingsTitleFont;
-            titleLabel.TextAlign = ContentAlignment.MiddleLeft;
+            _themeDarkButton = CreateThemeButton("深色", AppThemeMode.Dark);
+            _themeLightButton = CreateThemeButton("浅色", AppThemeMode.Light);
+            buttons.Controls.Add(_themeDarkButton);
+            buttons.Controls.Add(_themeLightButton);
 
-            var descriptionLabel = new Label();
-            descriptionLabel.Text =
-                "把 .zip、.rar 或 .7z 拖到窗口任意位置即可安装，也可以点击右侧按钮选择文件。\r\n" +
-                "仅接受包含 Cards\\<系列>\\SingleSetData.txt 的压缩包，安装后直接进入该系列的卡表。";
-            descriptionLabel.Dock = DockStyle.Fill;
-            descriptionLabel.ForeColor = AppTheme.TextMuted;
-            descriptionLabel.BackColor = Color.Transparent;
-            descriptionLabel.Font = _settingsHintFont;
-            descriptionLabel.TextAlign = ContentAlignment.TopLeft;
+            _themeHintLabel = CreateSettingsHintLabel(ThemeHintText);
+
+            item.Controls.Add(CreateSettingsTitleLabel("主题"), 0, 0);
+            item.Controls.Add(_themeHintLabel, 0, 1);
+            item.Controls.Add(buttons, 0, 2);
+            return item;
+        }
+
+        /// <summary>
+        /// One of the two theme buttons. The palette in use paints the active
+        /// button in the accent colour through <see cref="RoundedButton.Selected"/>;
+        /// the other one keeps the tile surface of a normal small button.
+        /// </summary>
+        private RoundedButton CreateThemeButton(string text, AppThemeMode mode)
+        {
+            var button = new RoundedButton();
+            button.Text = text;
+            button.AccessibleName = text + "主题";
+            button.Tag = mode;
+            button.Width = 96;
+            button.Height = 32;
+            button.CornerRadius = 8;
+            button.Font = _settingsTitleFont;
+            button.Margin = new Padding(0, 0, 8, 0);
+            button.Cursor = Cursors.Hand;
+            button.Click += ThemeButton_Click;
+            ApplyThemeButtonState(button);
+            return button;
+        }
+
+        /// <summary>
+        /// Paints one theme button for the palette in use: the active one takes
+        /// the accent fill with white text, the other one the tile surface with
+        /// the soft text colour.
+        /// </summary>
+        private static void ApplyThemeButtonState(RoundedButton button)
+        {
+            if (button == null || !(button.Tag is AppThemeMode))
+                return;
+
+            bool active = (AppThemeMode)button.Tag == AppTheme.Mode;
+            button.Selected = active;
+            button.SurfaceColor = Color.Empty;
+            button.NormalColor = active
+                ? AppTheme.Accent
+                : AppTheme.TileBackground;
+            button.HoverColor = active ? AppTheme.AccentHover : AppTheme.Divider;
+            button.PressedColor = active
+                ? AppTheme.AccentPressed
+                : AppTheme.Border;
+            button.SelectedColor = active
+                ? AppTheme.Accent
+                : AppTheme.TileBackground;
+            button.ForeColor = active
+                ? AppTheme.ForegroundOn(AppTheme.Accent)
+                : AppTheme.TextSoft;
+            button.Invalidate();
+        }
+
+        private void ThemeButton_Click(object sender, EventArgs e)
+        {
+            RoundedButton button = sender as RoundedButton;
+            if (button == null || !(button.Tag is AppThemeMode))
+                return;
+
+            ApplyThemeMode((AppThemeMode)button.Tag);
+        }
+
+        /// <summary>
+        /// Switches the palette. The colour table is swapped first because every
+        /// AppTheme getter reads it, then the live control tree is repainted from
+        /// the old palette to the new one, and the choice is written to
+        /// settings.txt. A failed write only shows up on the hint line: the
+        /// new theme still stays for this session.
+        /// </summary>
+        private void ApplyThemeMode(AppThemeMode mode)
+        {
+            if (mode == AppTheme.Mode)
+                return;
+
+            AppTheme.Apply(mode);
+            AppTheme.Recolor(this);
+            ApplyDarkChrome();
+            RefreshNavPaint();
+
+            ApplyThemeButtonState(_themeDarkButton);
+            ApplyThemeButtonState(_themeLightButton);
+
+            _appSettings.Theme = mode;
+            string error;
+            if (_appSettings.Save(out error))
+            {
+                if (_themeHintLabel != null)
+                    _themeHintLabel.Text = ThemeHintText;
+            }
+            else if (_themeHintLabel != null)
+            {
+                _themeHintLabel.Text = error;
+            }
+        }
+
+
+        /// <summary>
+        /// The one working setting of 存储: installs a card pack archive picked
+        /// through the file dialog. Dropping a card-pack archive anywhere on
+        /// the window does the same, so the description mentions both ways.
+        /// The block itself is flat like every other setting: only the button
+        /// keeps its own fill.
+        /// </summary>
+        private TableLayoutPanel CreateCardPackItem()
+        {
+            TableLayoutPanel item = CreateSettingsItemHost(3);
+            item.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, SettingsItemTitleHeight));
+            item.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, SettingsCardPackHintHeight));
+            item.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, SettingsCardPackButtonHeight));
 
             var button = new RoundedButton();
             button.Text = "选择压缩包…";
             button.AccessibleName = "选择卡表压缩包";
-            button.Dock = DockStyle.Fill;
+            button.Dock = DockStyle.Left;
+            button.Width = 148;
             button.CornerRadius = 8;
             button.SurfaceColor = AppTheme.TileBackground;
             button.NormalColor = AppTheme.Accent;
             button.HoverColor = AppTheme.AccentHover;
             button.PressedColor = AppTheme.AccentPressed;
-            button.ForeColor = Color.White;
+            button.ForeColor = AppTheme.ForegroundOn(AppTheme.Accent);
             button.Font = _settingsTitleFont;
             button.Margin = new Padding(0, 0, 0, 6);
             button.Click += delegate { BrowseCardPack(); };
 
-            layout.Controls.Add(titleLabel, 0, 0);
-            layout.Controls.Add(button, 1, 0);
-            layout.Controls.Add(descriptionLabel, 0, 1);
-            layout.SetColumnSpan(descriptionLabel, 2);
-
-            card.Controls.Add(layout);
-            card.SizeChanged += delegate { ApplyRoundedRegion(card, 10); };
-            return card;
-        }
-
-        /// <summary>
-        /// Rounded card with a title and a description. Shared by every
-        /// placeholder page so new pages stay visually consistent.
-        /// </summary>
-        private Panel CreatePlaceholderCard(string title, string description)
-        {
-            var card = new Panel();
-            card.Dock = DockStyle.Fill;
-            card.BackColor = AppTheme.TileBackground;
-            card.Margin = new Padding(0, 0, 0, 12);
-            card.Padding = new Padding(16, 10, 16, 12);
-
-            var titleLabel = new Label();
-            titleLabel.Text = title;
-            titleLabel.Dock = DockStyle.Top;
-            titleLabel.Height = 24;
-            titleLabel.ForeColor = AppTheme.Text;
-            titleLabel.BackColor = Color.Transparent;
-            titleLabel.Font = _settingsTitleFont;
-            titleLabel.TextAlign = ContentAlignment.MiddleLeft;
-
-            var descriptionLabel = new Label();
-            descriptionLabel.Text = description;
-            descriptionLabel.Dock = DockStyle.Fill;
-            descriptionLabel.ForeColor = AppTheme.TextMuted;
-            descriptionLabel.BackColor = Color.Transparent;
-            descriptionLabel.Font = _settingsHintFont;
-            descriptionLabel.TextAlign = ContentAlignment.TopLeft;
-
-            card.Controls.Add(descriptionLabel);
-            card.Controls.Add(titleLabel);
-            card.SizeChanged += delegate { ApplyRoundedRegion(card, 10); };
-            return card;
-        }
-
-        private static void ApplyRoundedRegion(Control control, int radius)
-        {
-            if (control == null || control.Width <= 0 || control.Height <= 0)
-                return;
-
-            using (GraphicsPath path = AppTheme.CreateRoundedRectangle(
-                new Rectangle(0, 0, control.Width, control.Height), radius))
-            {
-                Region previous = control.Region;
-                control.Region = new Region(path);
-                if (previous != null)
-                    previous.Dispose();
-            }
+            item.Controls.Add(CreateSettingsTitleLabel("卡表压缩包"), 0, 0);
+            item.Controls.Add(CreateSettingsHintLabel(
+                "把 .zip、.rar 或 .7z 拖到窗口任意位置即可安装，也可以点击下方按钮选择文件。\r\n" +
+                "仅接受包含 Cards\\<系列>\\SingleSetData.txt 的压缩包，安装后直接进入该系列的卡表。"), 0, 1);
+            item.Controls.Add(button, 0, 2);
+            return item;
         }
     }
 }

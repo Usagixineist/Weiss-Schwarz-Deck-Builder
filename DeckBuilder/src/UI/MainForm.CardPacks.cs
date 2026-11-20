@@ -40,6 +40,17 @@ namespace WeissDeckBuilder.UI
         /// </summary>
         private void ApplyCardPackDropHandlers(Control control)
         {
+            // 卡图 / 异画 boxes answer file drops themselves. Attaching the
+            // archive handlers to them as well would make a dropped png report
+            // 请一次拖入一个卡表压缩包 instead of being used as the art, so
+            // those controls are skipped (their children still get the hook).
+            if (!CardPackDropScope.Accepts(control))
+            {
+                for (int i = 0; i < control.Controls.Count; i++)
+                    ApplyCardPackDropHandlers(control.Controls[i]);
+                return;
+            }
+
             control.AllowDrop = true;
             control.DragEnter += CardPack_DragEnter;
             control.DragOver += CardPack_DragOver;
@@ -65,7 +76,7 @@ namespace WeissDeckBuilder.UI
         {
             _cardPackHint = new Panel();
             _cardPackHint.Dock = DockStyle.Fill;
-            _cardPackHint.BackColor = Color.FromArgb(13, 20, 36);
+            _cardPackHint.BackColor = AppTheme.InputBackground;
             _cardPackHint.Visible = false;
 
             var border = new Panel();

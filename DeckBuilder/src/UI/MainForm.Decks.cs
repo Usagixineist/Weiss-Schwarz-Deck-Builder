@@ -111,8 +111,7 @@ namespace WeissDeckBuilder.UI
             SetNavGroupEmphasis(_navDeckButton, selected,
                 _navDeckNewButton, _navDeckEditButton);
             SetNavGroupEmphasis(_navCardEditButton, selected,
-                _navCardEditModifyButton, _navCardEditAddButton,
-                _navCardEditAltButton);
+                _navCardEditModifyButton, _navCardEditAddButton);
         }
 
         /// <summary>
@@ -138,7 +137,7 @@ namespace WeissDeckBuilder.UI
             }
 
             bool box = ReferenceEquals(selected, group);
-            Color color = active ? Color.White : AppTheme.TextSoft;
+            Color color = AppTheme.TextSoft;
             if (group.Selected == box && group.ForeColor == color)
                 return;
 
@@ -471,7 +470,7 @@ namespace WeissDeckBuilder.UI
             _deckDetailBackLink.Dock = DockStyle.Fill;
             _deckDetailBackLink.BackColor = Color.Transparent;
             _deckDetailBackLink.LinkColor = AppTheme.TextSoft;
-            _deckDetailBackLink.ActiveLinkColor = Color.White;
+            _deckDetailBackLink.ActiveLinkColor = AppTheme.Text;
             _deckDetailBackLink.VisitedLinkColor = AppTheme.TextSoft;
             _deckDetailBackLink.DisabledLinkColor = AppTheme.TextMuted;
             _deckDetailBackLink.LinkBehavior = LinkBehavior.HoverUnderline;
@@ -565,6 +564,7 @@ namespace WeissDeckBuilder.UI
             // 卡组信息: the type / colour matrix, the level histogram and the
             // soul icons. The panel measures itself, so the group follows.
             _deckStats = new DeckStatsPanel();
+            _deckStats.Glossary = _triggerGlossary;
             _deckStatsGroup = CreateDeckSidebarGroup("卡组信息", _deckStats,
                 DeckSidebarGroupCaptionHeight +
                 DeckStatsPanel.MeasureHeight(null));

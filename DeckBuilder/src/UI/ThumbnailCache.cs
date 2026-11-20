@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -25,6 +26,14 @@ namespace WeissDeckBuilder.UI
         private readonly LinkedList<CacheEntry> _lru;
         private readonly object _sync;
 
+        /// <summary>
+        /// Decode statistics: how many images were resized and how long that
+        /// took. Only the -profile log reads them; they cost two timestamp
+        /// reads per decode, which is nothing next to the resize itself.
+        /// </summary>
+        private long _decodeCount;
+        private long _decodeTicks;
+
         public ThumbnailCache(int capacity)
         {
             _capacity = Math.Max(1, capacity);
@@ -32,6 +41,18 @@ namespace WeissDeckBuilder.UI
                 StringComparer.OrdinalIgnoreCase);
             _lru = new LinkedList<CacheEntry>();
             _sync = new object();
+        }
+
+        /// <summary>Images resized so far; cache hits are not counted.</summary>
+        public long DecodeCount
+        {
+            get { return _decodeCount; }
+        }
+
+        /// <summary>Time spent resizing images so far, in milliseconds.</summary>
+        public double DecodeMilliseconds
+        {
+            get { return _decodeTicks * 1000.0 / Stopwatch.Frequency; }
         }
 
         public Image GetOrLoad(
@@ -57,7 +78,10 @@ namespace WeissDeckBuilder.UI
                 }
             }
 
+            long decodeStart = Stopwatch.GetTimestamp();
             Image loaded = LoadAndResize(path, width, height, cropToFill);
+            _decodeCount++;
+            _decodeTicks += Stopwatch.GetTimestamp() - decodeStart;
             if (loaded == null)
                 return null;
 
@@ -112,8 +136,13 @@ namespace WeissDeckBuilder.UI
                     using (Graphics graphics = Graphics.FromImage(bitmap))
                     {
                         graphics.Clear(Color.White);
-                        graphics.InterpolationMode =
-                            InterpolationMode.HighQualityBicubic;
+                        // The card grid draws dozens of 140x196 tiles per frame,
+                        // where bilinear is ~30 % cheaper than bicubic and looks
+                        // the same at this size. Covers and the large detail view
+                        // keep bicubic.
+                        graphics.InterpolationMode = cropToFill
+                            ? InterpolationMode.HighQualityBicubic
+                            : InterpolationMode.HighQualityBilinear;
                         graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
                         graphics.SmoothingMode = SmoothingMode.HighQuality;
 

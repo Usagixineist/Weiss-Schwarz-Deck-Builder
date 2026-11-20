@@ -74,10 +74,21 @@ internal static class SmokeTests
                 db => TestCardPackArchives()),
             new TestGroup("collection", "我的收藏：数量文件与存储", false,
                 db => TestCollectionStore()),
+            new TestGroup("glossary", "触发名称：术语表与三个解析入口", false,
+                db => TestTriggerGlossary()),
+            new TestGroup("theme", "外观：主题设置与配色表", false,
+                db => { TestSettingsFile(); TestAppSettings(); TestAppPalette(); TestThemeRecolor(); }),
             new TestGroup("cardedit", "编辑卡片：卡块生成、写回与编辑器", false,
-                db => { TestCardEditor(); TestCardEditorPage(); }),
+                db => { TestCardEditor(); TestCardEditorPage(); TestCardImageDrops();
+                    TestCardEffectPairs(); TestCardEditorShorthandText();
+                    TestCardEditorShorthandPairs();
+                    TestCardEditorShorthandRow();
+                    TestCardEditorClimaxShorthand();
+                    TestCardEditorCloneBlock(); }),
             new TestGroup("packindex", "添加卡片：卡号定位卡包", false,
                 db => TestCardPackIndex()),
+            new TestGroup("images", "图片来源：一个目录只扫一次", false,
+                db => TestImageIndex()),
             new TestGroup("altart", "添加异画：命名规则、写入与识别", false,
                 db => { TestAltArtNaming(); TestAltArtWriter(); TestAltArtPage(); }),
             new TestGroup("launcher", "启动游戏：定位游戏目录与不热更参数", true,
@@ -276,9 +287,23 @@ internal static class SmokeTests
                 e002x.ImagePath.IndexOf("AlternateArtwork",
                     StringComparison.OrdinalIgnoreCase) >= 0,
                 e002x.ImagePath ?? string.Empty);
+
+            // JPNames.txt supplies the display name. LoadFolder applies it once,
+            // after the extra rarities were appended, so a card and the alt art
+            // clone that copies it both end up with the same Japanese name.
+            Check("E002 keeps its Japanese name",
+                !string.IsNullOrEmpty(e002.JapaneseName),
+                e002.JapaneseName ?? "missing");
+            Check("E002X shares the Japanese name of E002",
+                e002x.JapaneseName == e002.JapaneseName,
+                e002x.JapaneseName ?? "missing");
         }
 
         Check("no empty card names", s18.Cards.All(c => !string.IsNullOrEmpty(c.Name)));
+
+        TestRealEffectPairs(series);
+        TestRealCloneBlocks(series);
+        TestRealShorthandBlocks(series);
 
         // 添加卡片 resolves the card pack from the 卡号 alone, so the index has
         // to find the real folder (and it has to exist on disk).
@@ -1285,12 +1310,28 @@ internal static class SmokeTests
             stats.SoulTriggerCards == 5 && stats.DoubleSoulTriggerCards == 1,
             stats.SoulTriggerCards + "/" + stats.DoubleSoulTriggerCards);
 
+        Check("deck stats count every trigger icon",
+            stats.GetTriggerTotal(TriggerIcon.Soul) == 5 &&
+            stats.GetTriggerTotal(TriggerIcon.DoubleSoul) == 1 &&
+            stats.GetTriggerTotal(TriggerIcon.Book) == 0 &&
+            stats.GetTriggerTotal(TriggerIcon.None) == 0,
+            stats.GetTriggerTotal(TriggerIcon.Soul) + "/" +
+            stats.GetTriggerTotal(TriggerIcon.DoubleSoul) + "/" +
+            stats.GetTriggerTotal(TriggerIcon.Book));
+
+        IList<TriggerIcon> used = stats.GetTriggersInUse();
+        Check("deck stats list only the triggers the deck uses",
+            used.Count == 2 && used[0] == TriggerIcon.Soul &&
+            used[1] == TriggerIcon.DoubleSoul,
+            used.Count.ToString());
+
         DeckStatistics empty = DeckStatistics.Compute(null, null);
         Check("an empty deck reports zero everywhere",
             empty.Total == 0 && empty.Unresolved == 0 &&
             empty.GetCategoryTotal(CardCategory.Character) == 0 &&
             empty.GetLevelTotal(0) == 0 &&
-            empty.SoulTriggerCards == 0 && empty.DoubleSoulTriggerCards == 0);
+            empty.SoulTriggerCards == 0 && empty.DoubleSoulTriggerCards == 0 &&
+            empty.GetTriggersInUse().Count == 0);
     }
 
     private static void AddStatCard(Dictionary<string, WeissCard> cards,
@@ -1821,6 +1862,499 @@ internal static class SmokeTests
     }
 
     /// <summary>
+    /// 一个临时目录里唯一的设置文件。主题和触发名称现在共用它，所以测试只需要
+    /// 一个路径就能同时读两边。
+    /// </summary>
+    private static SettingsStore SettingsFor(string root)
+    {
+        return new SettingsStore(Path.Combine(root, SettingsStore.FileName));
+    }
+
+    /// <summary>
+    /// 设置页的所有改动只落一个文件：主题在 [appearance]、触发名称在
+    /// [terminology]，两边各存一次互不覆盖；这个版本不认识的分组和键原样带回；
+    /// 旧版本留下的 StreamingAssets\AppSettings.txt / TriggerGlossary.txt 在第一次
+    /// 启动时搬进新文件再删掉，用户改过的主题和名字不会丢。
+    /// </summary>
+    private static void TestSettingsFile()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-settingsfile-" + Guid.NewGuid().ToString("N"));
+        string path = Path.Combine(root, SettingsStore.FileName);
+        try
+        {
+            SettingsStore store = SettingsFor(root);
+            var settings = new AppSettings(store);
+            var glossary = new TriggerGlossary(store);
+            Check("settings and glossary share one file",
+                string.Equals(settings.FilePath, path,
+                    StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(glossary.FilePath, path,
+                    StringComparison.OrdinalIgnoreCase),
+                settings.FilePath + " / " + glossary.FilePath);
+
+            string error;
+            settings.Theme = AppThemeMode.Light;
+            Check("the one file stores the theme",
+                settings.Save(out error), error ?? string.Empty);
+            glossary.SetName(TriggerIcon.Book, "书");
+            Check("the one file stores the trigger name",
+                glossary.Save(out error), error ?? string.Empty);
+
+            string text = File.ReadAllText(path);
+            Check("the one file holds both groups",
+                text.Contains("[appearance]") && text.Contains("theme=light") &&
+                text.Contains("[terminology]") && text.Contains("Book=书"), text);
+
+            var reopenedStore = SettingsFor(root);
+            Check("one file brings the theme back",
+                new AppSettings(reopenedStore).Theme == AppThemeMode.Light,
+                AppSettings.ToText(new AppSettings(reopenedStore).Theme));
+            Check("one file brings the trigger name back",
+                new TriggerGlossary(reopenedStore).GetName(TriggerIcon.Book) == "书",
+                new TriggerGlossary(reopenedStore).GetName(TriggerIcon.Book));
+
+            // 新版本写的分组，旧版本读到时不能抹掉，否则升级/降级一次就少一项设置。
+            File.WriteAllText(path,
+                "# note\r\n\r\n[appearance]\r\ntheme=dark\r\n\r\n[future]\r\nkey=1\r\n",
+                new UTF8Encoding(false));
+            SettingsStore futureStore = SettingsFor(root);
+            var futureSettings = new AppSettings(futureStore);
+            futureSettings.Theme = AppThemeMode.Light;
+            Check("a save keeps unknown groups",
+                futureSettings.Save(out error), error ?? string.Empty);
+            text = File.ReadAllText(path);
+            Check("unknown groups stay in the file",
+                text.Contains("[future]") && text.Contains("key=1") &&
+                text.Contains("theme=light"), text);
+
+            futureStore = SettingsFor(root);
+            var futureGlossary = new TriggerGlossary(futureStore);
+            futureGlossary.SetName(TriggerIcon.Gate, "门");
+            futureGlossary.Save(out error);
+            futureGlossary.Reset();
+            Check("clearing the names keeps the theme",
+                futureGlossary.Save(out error) &&
+                new AppSettings(SettingsFor(root)).Theme == AppThemeMode.Light,
+                error ?? string.Empty);
+            Check("cleared names leave nothing behind",
+                !File.ReadAllText(path).Contains("Gate="),
+                File.ReadAllText(path));
+
+            // 旧版本的两个文件：搬进新文件后删掉，键写坏的条目直接丢掉。
+            string legacyRoot = Path.Combine(root, "legacy");
+            Directory.CreateDirectory(legacyRoot);
+            File.WriteAllText(Path.Combine(legacyRoot, "AppSettings.txt"),
+                "# old\r\ntheme=light\r\n", new UTF8Encoding(false));
+            File.WriteAllText(Path.Combine(legacyRoot, "TriggerGlossary.txt"),
+                "# old\r\nBook=书\r\n坏行=坏\r\n", new UTF8Encoding(false));
+            string legacyPath = Path.Combine(legacyRoot, SettingsStore.FileName);
+            SettingsStore migrated = SettingsStore.Open(legacyPath, legacyRoot);
+            Check("legacy settings are imported",
+                new AppSettings(migrated).Theme == AppThemeMode.Light &&
+                new TriggerGlossary(migrated).GetName(TriggerIcon.Book) == "书",
+                legacyPath);
+            Check("legacy junk keys are dropped",
+                !File.ReadAllText(legacyPath).Contains("坏行"),
+                File.ReadAllText(legacyPath));
+            Check("legacy files are removed after the import",
+                !File.Exists(Path.Combine(legacyRoot, "AppSettings.txt")) &&
+                !File.Exists(Path.Combine(legacyRoot, "TriggerGlossary.txt")));
+            Check("the import leaves the new file behind",
+                File.Exists(legacyPath), legacyPath);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// 术语 page table: the card files keep the English trigger names, so the
+    /// glossary only records the names the user renamed. The file is plain
+    /// UTF-8 <c>English=中文</c>; clearing a name or deleting the file brings the
+    /// built-in 魂 / 2魂 names back, and the editor accepts all three inputs
+    /// (number, English name, Chinese name).
+    /// </summary>
+    private static void TestTriggerGlossary()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-glossary-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var glossary = new TriggerGlossary(SettingsFor(root));
+            Check("glossary lists 23 editable triggers",
+                TriggerGlossary.EditableIcons.Length == 23,
+                TriggerGlossary.EditableIcons.Length.ToString());
+            Check("glossary skips 无 and 魂",
+                Array.IndexOf(TriggerGlossary.EditableIcons, TriggerIcon.None) < 0 &&
+                Array.IndexOf(TriggerGlossary.EditableIcons, TriggerIcon.Soul) < 0);
+            Check("glossary lives in the shared settings file",
+                string.Equals(glossary.FilePath,
+                    Path.Combine(root, SettingsStore.FileName),
+                    StringComparison.OrdinalIgnoreCase), glossary.FilePath);
+            Check("glossary has no file before the first save",
+                !glossary.HasFile, glossary.FilePath);
+            Check("glossary keeps the built-in 魂 / 2魂 names",
+                glossary.GetName(TriggerIcon.Soul) == "魂" &&
+                glossary.GetName(TriggerIcon.DoubleSoul) == "2魂",
+                glossary.GetName(TriggerIcon.Soul) + "/" +
+                glossary.GetName(TriggerIcon.DoubleSoul));
+            Check("glossary falls back to the English name",
+                glossary.GetName(TriggerIcon.Book) == "Book" &&
+                !glossary.IsCustomized(TriggerIcon.Book),
+                glossary.GetName(TriggerIcon.Book));
+
+            string error;
+            glossary.SetName(TriggerIcon.Book, " 书 ");
+            Check("glossary trims the typed name",
+                glossary.GetName(TriggerIcon.Book) == "书" &&
+                glossary.IsCustomized(TriggerIcon.Book),
+                glossary.GetName(TriggerIcon.Book));
+            Check("glossary saves the table",
+                glossary.Save(out error), error ?? string.Empty);
+
+            string text = File.ReadAllText(glossary.FilePath);
+            Check("glossary file stores the renamed trigger only",
+                text.Contains("Book=书") && !text.Contains("Soul=") &&
+                !text.Contains("Gate="), text);
+            Check("glossary file starts with a comment",
+                text.TrimStart().StartsWith("#", StringComparison.Ordinal),
+                text);
+
+            var reloaded = new TriggerGlossary(SettingsFor(root));
+            Check("glossary reads the saved name back",
+                reloaded.HasFile && reloaded.GetName(TriggerIcon.Book) == "书",
+                reloaded.GetName(TriggerIcon.Book));
+
+            File.WriteAllText(reloaded.FilePath,
+                "# comment\r\n\r\n[terminology]\r\nGate=门\r\n不存在的图标=坏行\r\nBook = 书\r\n",
+                new UTF8Encoding(false));
+            reloaded.Load();
+            Check("glossary ignores comments and junk lines",
+                reloaded.GetName(TriggerIcon.Gate) == "门" &&
+                reloaded.GetName(TriggerIcon.Book) == "书",
+                reloaded.GetName(TriggerIcon.Gate) + "/" +
+                reloaded.GetName(TriggerIcon.Book));
+            Check("glossary ignores an unknown icon",
+                !reloaded.IsCustomized(TriggerIcon.CustomIcon6));
+
+            TriggerIcon parsed;
+            Check("glossary parses the English name",
+                TriggerGlossary.TryParse("gate", null, out parsed) &&
+                parsed == TriggerIcon.Gate, parsed.ToString());
+            Check("glossary parses a number",
+                TriggerGlossary.TryParse("7", null, out parsed) &&
+                parsed == (TriggerIcon)7, parsed.ToString());
+            Check("glossary parses the built-in 2魂",
+                TriggerGlossary.TryParse("2魂", null, out parsed) &&
+                parsed == TriggerIcon.DoubleSoul, parsed.ToString());
+            Check("glossary parses a custom Chinese name",
+                TriggerGlossary.TryParse("门", reloaded, out parsed) &&
+                parsed == TriggerIcon.Gate, parsed.ToString());
+            Check("glossary refuses blank and unknown text",
+                !TriggerGlossary.TryParse("  ", reloaded, out parsed) &&
+                !TriggerGlossary.TryParse("没有这个", reloaded, out parsed) &&
+                !TriggerGlossary.TryParse(null, reloaded, out parsed));
+            Check("glossary refuses a number outside the enum",
+                !TriggerGlossary.TryParse("99", null, out parsed) &&
+                TriggerGlossary.TryParse("24", null, out parsed) &&
+                parsed == TriggerIcon.CustomIcon6);
+
+            reloaded.Reset();
+            Check("glossary reset drops the custom names",
+                reloaded.GetName(TriggerIcon.Gate) == "Gate" &&
+                reloaded.GetName(TriggerIcon.Book) == "Book" &&
+                !reloaded.IsCustomized(TriggerIcon.Book),
+                reloaded.GetName(TriggerIcon.Gate));
+
+            Check("glossary saves an emptied table",
+                reloaded.Save(out error), error ?? string.Empty);
+            string reset = File.ReadAllText(reloaded.FilePath);
+            Check("glossary keeps only the header after a reset",
+                !reset.Contains("Gate=") && !reset.Contains("Book="), reset);
+
+            glossary.SetName(TriggerIcon.Book, string.Empty);
+            Check("glossary drops a name cleared to blank",
+                !glossary.IsCustomized(TriggerIcon.Book) &&
+                glossary.GetName(TriggerIcon.Book) == "Book");
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The theme switch is only worth anything if the choice survives a
+    /// restart: AppSettings reads and writes the [appearance] group of settings.txt,
+    /// starts on dark, and never throws on a missing or broken file.
+    /// </summary>
+    private static void TestAppSettings()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-settings-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var settings = new AppSettings(SettingsFor(root));
+            Check("settings default to the dark theme",
+                settings.Theme == AppThemeMode.Dark && !settings.HasFile,
+                AppSettings.ToText(settings.Theme));
+            Check("settings live in the shared settings file",
+                string.Equals(settings.FilePath,
+                    Path.Combine(root, SettingsStore.FileName),
+                    StringComparison.OrdinalIgnoreCase), settings.FilePath);
+
+            string error;
+            settings.Theme = AppThemeMode.Light;
+            Check("settings save the light theme",
+                settings.Save(out error), error ?? string.Empty);
+
+            string text = File.ReadAllText(settings.FilePath);
+            Check("settings write theme=light", text.Contains("theme=light"),
+                text);
+            Check("settings start the file with a comment",
+                text.TrimStart().StartsWith("#", StringComparison.Ordinal), text);
+
+            var reloaded = new AppSettings(SettingsFor(root));
+            Check("settings read the light theme back",
+                reloaded.HasFile && reloaded.Theme == AppThemeMode.Light,
+                AppSettings.ToText(reloaded.Theme));
+
+            File.WriteAllText(reloaded.FilePath,
+                "# note\r\n\r\n[appearance]\r\nTHEME = light\r\nunknown=1\r\n坏行\r\n",
+                new UTF8Encoding(false));
+            reloaded.Load();
+            Check("settings ignore comments, case and junk lines",
+                reloaded.Theme == AppThemeMode.Light,
+                AppSettings.ToText(reloaded.Theme));
+
+            File.WriteAllText(reloaded.FilePath, "theme=purple\r\n",
+                new UTF8Encoding(false));
+            reloaded.Load();
+            Check("settings fall back to dark on an unknown value",
+                reloaded.Theme == AppThemeMode.Dark,
+                AppSettings.ToText(reloaded.Theme));
+
+            reloaded.Theme = AppThemeMode.Light;
+            File.Delete(reloaded.FilePath);
+            reloaded.Load();
+            Check("settings return to dark after the file is deleted",
+                reloaded.Theme == AppThemeMode.Dark && !reloaded.HasFile,
+                AppSettings.ToText(reloaded.Theme));
+
+            AppThemeMode parsed;
+            Check("settings parse the theme words",
+                AppSettings.TryParseTheme(" Light ", out parsed) &&
+                parsed == AppThemeMode.Light &&
+                AppSettings.TryParseTheme("dark", out parsed) &&
+                parsed == AppThemeMode.Dark);
+            Check("settings refuse blank and unknown theme words",
+                !AppSettings.TryParseTheme(string.Empty, out parsed) &&
+                !AppSettings.TryParseTheme(null, out parsed) &&
+                !AppSettings.TryParseTheme("purple", out parsed));
+
+            Check("settings without a data root cannot save",
+                !new AppSettings(null).Save(out error) &&
+                !string.IsNullOrEmpty(error), error ?? string.Empty);
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// The palette is the only place a theme knows its colours. Switching has
+    /// to move all ten slots at once, and the repaint path relies on
+    /// MapFromPrevious turning an old slot into the matching new one while
+    /// leaving the accent, the status colours and white untouched.
+    /// </summary>
+    private static void TestAppPalette()
+    {
+        AppPalette.Select(AppThemeMode.Dark);
+        Check("palette starts on the dark theme",
+            ReferenceEquals(AppPalette.Current, AppPalette.Dark) &&
+            ReferenceEquals(AppPalette.Previous, AppPalette.Dark));
+        Check("palette resolves both themes and an unknown mode",
+            ReferenceEquals(AppPalette.For(AppThemeMode.Dark), AppPalette.Dark) &&
+            ReferenceEquals(AppPalette.For(AppThemeMode.Light), AppPalette.Light) &&
+            ReferenceEquals(AppPalette.For((AppThemeMode)99), AppPalette.Dark));
+        Check("palette keeps its colours when dark is selected again",
+            AppPalette.MapFromPrevious(AppPalette.Dark.TileBackground) ==
+                AppPalette.Dark.TileBackground);
+
+        AppPalette.Select(AppThemeMode.Light);
+        Check("palette switches to light and remembers dark",
+            ReferenceEquals(AppPalette.Current, AppPalette.Light) &&
+            ReferenceEquals(AppPalette.Previous, AppPalette.Dark));
+        Check("palette maps every dark slot onto the light one",
+            AppPalette.MapFromPrevious(AppPalette.Dark.Navigation) ==
+                AppPalette.Light.Navigation &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.MainBackground) ==
+                AppPalette.Light.MainBackground &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.TileBackground) ==
+                AppPalette.Light.TileBackground &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.InputBackground) ==
+                AppPalette.Light.InputBackground &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.Divider) ==
+                AppPalette.Light.Divider &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.Border) ==
+                AppPalette.Light.Border &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.Text) ==
+                AppPalette.Light.Text &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.TextSoft) ==
+                AppPalette.Light.TextSoft &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.TextMuted) ==
+                AppPalette.Light.TextMuted &&
+            AppPalette.MapFromPrevious(AppPalette.Dark.Scrim) ==
+                AppPalette.Light.Scrim);
+        Check("palette leaves accent, status and white alone",
+            AppPalette.MapFromPrevious(AppTheme.Accent) == AppTheme.Accent &&
+            AppPalette.MapFromPrevious(AppTheme.Danger) == AppTheme.Danger &&
+            AppPalette.MapFromPrevious(Color.White) == Color.White &&
+            AppPalette.MapFromPrevious(Color.Empty).IsEmpty);
+
+        AppPalette.Select(AppThemeMode.Light);
+        Check("palette ignores a repeated light select",
+            ReferenceEquals(AppPalette.Previous, AppPalette.Dark));
+
+        AppPalette.Select(AppThemeMode.Dark);
+        Check("palette maps the light slots back",
+            ReferenceEquals(AppPalette.Current, AppPalette.Dark) &&
+            AppPalette.MapFromPrevious(AppPalette.Light.TileBackground) ==
+                AppPalette.Dark.TileBackground);
+        Check("theme reports the palette in use",
+            AppTheme.Mode == AppThemeMode.Dark && AppTheme.IsDark &&
+            AppTheme.TileBackground == AppPalette.Dark.TileBackground &&
+            AppTheme.Text == AppPalette.Dark.Text);
+    }
+
+    /// <summary>
+    /// 换主题不重建界面：<see cref="AppTheme.Recolor"/> 走一遍已经建好的控件树，
+    /// 按槽位把写死的颜色换成新配色，圆角按钮 / 圆角输入框自己缓存的颜色也要
+    /// 一起换，实现了 <see cref="IThemeAware"/> 的控件再收到一次 ApplyTheme。
+    /// 控件只在内存里搭、不显示窗口，所以有没有交互桌面都能跑。
+    /// </summary>
+    private static void TestThemeRecolor()
+    {
+        AppTheme.Apply(AppThemeMode.Dark);
+
+        var page = new Panel();
+        page.BackColor = AppTheme.MainBackground;
+        page.ForeColor = AppTheme.Text;
+
+        var tile = new Panel();
+        tile.BackColor = AppTheme.TileBackground;
+        tile.ForeColor = AppTheme.TextMuted;
+        page.Controls.Add(tile);
+
+        var button = new RoundedButton();
+        button.BackColor = AppTheme.Navigation;
+        button.ForeColor = Color.White;
+        button.NormalColor = AppTheme.Navigation;
+        button.HoverColor = AppTheme.AccentHover;
+        button.SelectedColor = AppTheme.Divider;
+        button.SurfaceColor = AppTheme.InputBackground;
+        page.Controls.Add(button);
+
+        var input = new RoundedTextBox();
+        input.FillColor = AppTheme.InputBackground;
+        input.BorderColor = AppTheme.Border;
+        page.Controls.Add(input);
+
+        var probe = new ThemeAwareProbe();
+        probe.BackColor = AppTheme.TileBackground;
+        page.Controls.Add(probe);
+
+        AppTheme.Apply(AppThemeMode.Light);
+        AppTheme.Recolor(page);
+
+        Check("recolor repaints the page itself",
+            page.BackColor == AppPalette.Light.MainBackground &&
+            page.ForeColor == AppPalette.Light.Text,
+            page.BackColor.ToString());
+        Check("recolor repaints nested controls",
+            tile.BackColor == AppPalette.Light.TileBackground &&
+            tile.ForeColor == AppPalette.Light.TextMuted,
+            tile.BackColor.ToString());
+        Check("recolor repaints a rounded button",
+            button.BackColor == AppPalette.Light.Navigation &&
+            button.NormalColor == AppPalette.Light.Navigation &&
+            button.SelectedColor == AppPalette.Light.Divider &&
+            button.SurfaceColor == AppPalette.Light.InputBackground,
+            button.NormalColor.ToString());
+        Check("recolor leaves white text and the accent alone",
+            button.ForeColor == Color.White &&
+            button.HoverColor == AppTheme.AccentHover,
+            button.HoverColor.ToString());
+        Check("recolor repaints a rounded input",
+            input.FillColor == AppPalette.Light.InputBackground &&
+            input.BorderColor == AppPalette.Light.Border,
+            input.FillColor.ToString());
+        Check("recolor asks a theme aware control to rebuild",
+            probe.ApplyThemeCount == 1 &&
+            probe.BackColor == AppPalette.Light.TileBackground,
+            "count=" + probe.ApplyThemeCount);
+        Check("foreground flips with the brightness of the fill",
+            AppTheme.ForegroundOn(AppTheme.Accent) == Color.White &&
+            AppTheme.ForegroundOn(Color.White) == AppPalette.Light.Text &&
+            AppTheme.ForegroundOn(Color.Empty) == AppPalette.Light.Text,
+            AppTheme.ForegroundOn(AppTheme.Accent).ToString());
+
+        AppTheme.Apply(AppThemeMode.Dark);
+        page.Dispose();
+
+        Check("recolor goes back to the dark colours",
+            AppTheme.MainBackground == AppPalette.Dark.MainBackground &&
+            AppTheme.Text == AppPalette.Dark.Text);
+    }
+
+    /// <summary>
+    /// 只等着 <see cref="AppTheme.Recolor"/> 叫它一声的控件，用来确认重绘真的
+    /// 通知到了缓存画刷的那一层。
+    /// </summary>
+    private sealed class ThemeAwareProbe : Panel, IThemeAware
+    {
+        public int ApplyThemeCount { get; private set; }
+
+        public void ApplyTheme()
+        {
+            ApplyThemeCount++;
+        }
+    }
+
+    /// <summary>
     /// The 导入卡组 layer is checked off screen: reading a deck replaces the
     /// tray without a second question, a staged deck only disappears on the
     /// second right click (the first one paints its tile red) and Escape steps
@@ -2335,6 +2869,50 @@ internal static class SmokeTests
         return count;
     }
 
+    /// <summary>
+    /// The lines of one card block of a CardData text: the `Character:` /
+    /// `Event:` / `Climax:` header down to its `EndCard`, inclusive. Returns an
+    /// empty array when the id has no block.
+    /// </summary>
+    private static string[] ReadCardBlock(string text, string id)
+    {
+        string[] lines = CardDataWriter.SplitLines(text);
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string trimmed = lines[i].Trim();
+            int colon = trimmed.IndexOf(':');
+            if (colon <= 0)
+                continue;
+
+            string head = trimmed.Substring(0, colon);
+            if (!string.Equals(head, "Character", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(head, "Event", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(head, "Climax", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!string.Equals(trimmed.Substring(colon + 1).Trim(), id,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            for (int j = i; j < lines.Length; j++)
+            {
+                if (string.Equals(lines[j].Trim(), "EndCard",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    var block = new string[j - i + 1];
+                    Array.Copy(lines, i, block, 0, block.Length);
+                    return block;
+                }
+            }
+            return new string[0];
+        }
+        return new string[0];
+    }
+
     private static byte[] ReadHeader(string path, int count)
     {
         var buffer = new byte[count];
@@ -2351,6 +2929,75 @@ internal static class SmokeTests
             }
         }
         return buffer;
+    }
+
+    /// <summary>
+    /// 图片来源：一个卡包目录只枚举一次（以前按 png/jpg/jpeg/webp 各扫一遍，
+    /// 打开系列时白花 ~20 ms）。索引要同时收完整文件名和去掉扩展名的名字，
+    /// 图片以外的文件不能混进来，卡号与文件名对不上时仍要靠候选名找到图。
+    /// </summary>
+    private static void TestImageIndex()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-imageindex-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            File.WriteAllText(Path.Combine(root, "CardData.txt"), "Character:A");
+            File.WriteAllText(Path.Combine(root, "notes.txt"), "n");
+            File.WriteAllBytes(Path.Combine(root, "HOL_W104_041.png"),
+                new byte[] { 1 });
+            File.WriteAllBytes(Path.Combine(root, "AW_S18_E002.jpg"),
+                new byte[] { 1 });
+            File.WriteAllBytes(Path.Combine(root, "AW_S18_003.jpeg"),
+                new byte[] { 1 });
+            File.WriteAllBytes(Path.Combine(root, "AW_S18_004.webp"),
+                new byte[] { 1 });
+
+            Dictionary<string, string> index = ImageLocator.BuildIndex(root);
+            Check("image index covers four images", index.Count == 8,
+                index.Count.ToString());
+            Check("image index skips non-image files",
+                !index.ContainsKey("CardData.txt") &&
+                !index.ContainsKey("notes.txt"));
+            Check("image index keeps a jpeg name",
+                index.ContainsKey("AW_S18_003.jpeg"));
+            Check("image index keeps a base name",
+                index.ContainsKey("AW_S18_004"));
+            Check("image index ignores case",
+                index.ContainsKey("hol_w104_041.PNG"));
+
+            // The card code rarely matches the file name: the / and - spellings
+            // have to be tried, and the parallel E is often only in the file.
+            var card = new WeissCard();
+            card.Id = "AW/S18-002";
+            card.ImageId = "AW/S18-002";
+            ImageLocator.Resolve(card, index);
+            Check("image index resolves the parallel E",
+                card.ImagePath == Path.Combine(root, "AW_S18_E002.jpg"),
+                card.ImagePath ?? "missing");
+
+            var missing = new WeissCard();
+            missing.Id = "AW/S18-999";
+            missing.ImageId = "AW/S18-999";
+            ImageLocator.Resolve(missing, index);
+            Check("image index leaves an unknown card empty",
+                string.IsNullOrEmpty(missing.ImagePath),
+                missing.ImagePath ?? "null");
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
     }
 
     private static void TestCardCodeHelpers()
@@ -2808,6 +3455,70 @@ internal static class SmokeTests
                 read != null && read.EffectCode.Contains("Draw 1"),
                 read == null ? "null" : read.EffectCode);
 
+            // 术语: the 触发 field prints the glossary name, accepts it back and
+            // still understands the English name the card table stores.
+            string glossaryRoot = Path.Combine(Path.GetTempPath(),
+                "ws-cardedit-glossary-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var glossary = new TriggerGlossary(SettingsFor(glossaryRoot));
+                glossary.SetName(TriggerIcon.Book, "书");
+                page.Glossary = glossary;
+                page.LoadDraft(draft, series.Folders);
+
+                FieldBox triggerBox = FindEditorField(page, "_triggerBox");
+                Check("cardedit page shows the Chinese 触发 name",
+                    triggerBox != null && triggerBox.Input.Text == "书",
+                    triggerBox == null ? "null" : triggerBox.Input.Text);
+
+                if (triggerBox != null)
+                {
+                    triggerBox.Input.Text = "魂";
+                    CardEditorDraft soulDraft = page.ReadDraft();
+                    Check("cardedit page accepts the built-in 魂 name",
+                        soulDraft != null && soulDraft.Trigger == TriggerIcon.Soul,
+                        soulDraft == null ? "null" : soulDraft.Trigger.ToString());
+
+                    triggerBox.Input.Text = "书";
+                    CardEditorDraft bookDraft = page.ReadDraft();
+                    Check("cardedit page accepts a custom 触发 name",
+                        bookDraft != null && bookDraft.Trigger == TriggerIcon.Book,
+                        bookDraft == null ? "null" : bookDraft.Trigger.ToString());
+
+                    triggerBox.Input.Text = "Gate";
+                    CardEditorDraft gateDraft = page.ReadDraft();
+                    Check("cardedit page still accepts the English 触发 name",
+                        gateDraft != null && gateDraft.Trigger == TriggerIcon.Gate,
+                        gateDraft == null ? "null" : gateDraft.Trigger.ToString());
+
+                    triggerBox.Input.Text = "没有这个触发";
+                    Check("cardedit page rejects an unknown 触发 name",
+                        page.ReadDraft() == null);
+                }
+
+                page.Glossary = null;
+                draft.Trigger = TriggerIcon.Book;
+                page.LoadDraft(draft, series.Folders);
+                FieldBox englishBox = FindEditorField(page, "_triggerBox");
+                Check("cardedit page falls back to the English 触发 name",
+                    englishBox != null && englishBox.Input.Text == "Book",
+                    englishBox == null ? "null" : englishBox.Input.Text);
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(glossaryRoot))
+                        Directory.Delete(glossaryRoot, true);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+
             FieldInfo codeField = typeof(CardEditorPage).GetField("_codeBox",
                 BindingFlags.Instance | BindingFlags.NonPublic);
             var codeBox = codeField == null ? null : codeField.GetValue(page) as FieldBox;
@@ -2878,6 +3589,184 @@ internal static class SmokeTests
                 (effectBox == null ? "null" : effectBox.Height.ToString()) + "/" +
                 (codeBox == null ? "null" : codeBox.Height.ToString()));
 
+            // 多效果: 每条效果一行，内容紧挨着它自己的代码，而不是全部内容
+            // 挤在上面、全部代码挤在下面。
+            CardEditorDraft two = CardEditorDraft.CreateBlank(series, folder);
+            two.IsNew = false;
+            two.Id = "TST/09-E002";
+            two.Name = "两条效果";
+            two.EffectCode =
+                "Auto: OnPlay\n{\n        Draw 1\n}\n" +
+                "Cont: GiveSelf\n{\n        GainPower 1000\n}";
+            two.TextLines = new List<string> { "第一条", "第二条" };
+            two.Text = "第一条\n第二条";
+            page.LoadDraft(two, null);
+
+            System.Collections.IList rows = EditorEffectRows(page);
+            Check("cardedit page shows one row per 效果",
+                rows != null && rows.Count == 2,
+                rows == null ? "null" : rows.Count.ToString());
+            Check("cardedit page numbers the second 效果",
+                HasLabelText(page, "效果 2 · 内容（卡面上印的效果文字）") &&
+                HasLabelText(page, "效果 2 · 代码（Act / Auto / Cont 与 { } 代码块）"));
+
+            CardEditorDraft readTwo = page.ReadDraft();
+            Check("cardedit page reads both 效果 back",
+                readTwo != null && readTwo.Text == "第一条\n第二条" &&
+                readTwo.EffectCode.Contains("GainPower 1000") &&
+                readTwo.TextLines != null && readTwo.TextLines.Count == 2,
+                readTwo == null ? "null" : readTwo.Text);
+            IList<CardEffectPair> readPairs =
+                CardEffectSplitter.PairDraft(readTwo);
+            Check("cardedit page keeps both 效果 paired",
+                readPairs.Count == 2 && readPairs[1].Text == "第二条" &&
+                readPairs[1].Code.Contains("GainPower 1000") &&
+                !readPairs[1].Code.Contains("Draw 1"),
+                readPairs.Count + " / " +
+                (readPairs.Count > 1 ? readPairs[1].Code : "?"));
+
+            // 简写行: 效果内容写成 `*Shorthand` 时，这一行的“简写提供（只读）”
+            // 跟 内容 / 代码 一样是一行普通小标题（多条效果时带“效果 N ·”编号），
+            // 下面的只读框占满整列、只有一条文字那么高（1-2 行）；可编辑的
+            // “效果内容”只装卡块自己的
+            // `Text` 行，自己没有文字时连输入框一起省掉；读回草稿后，每一行自己
+            // 的文字仍写回它自己那段代码（简写那两段没有自己的 `Text`，后面的
+            // 效果不能因此往前挪一行）。
+            CardEditorDraft shorthand = CardEditorDraft.CreateBlank(series, folder);
+            shorthand.IsNew = false;
+            shorthand.Id = "TST/09-E003";
+            shorthand.Name = "简写行";
+            shorthand.EffectCode =
+                "*EncoreAll\n*HealOne\n" +
+                "Cont: GiveSelf\n{\n        GainPower 1000\n}";
+            shorthand.TextLines = new List<string>
+            {
+                "【自】简写正文一", "【起】简写正文二", "自己的文字"
+            };
+            shorthand.Text = "【自】简写正文一\n【起】简写正文二\n自己的文字";
+            shorthand.TextBlockIndexes = new List<int> { 0, 1, 2 };
+            shorthand.TextInherited = new List<bool> { true, true, false };
+            page.LoadDraft(shorthand, null);
+
+            System.Collections.IList shorthandRows = EditorEffectRows(page);
+            Check("cardedit page shows one row per 效果 of a shorthand card",
+                shorthandRows != null && shorthandRows.Count == 3,
+                shorthandRows == null ? "null" : shorthandRows.Count.ToString());
+            if (shorthandRows != null && shorthandRows.Count == 3)
+            {
+                FieldBox firstPreview = FindEffectRowBox(shorthandRows[0], "Inherited");
+                FieldBox firstText = FindEffectRowBox(shorthandRows[0], "Text");
+                FieldBox thirdPreview = FindEffectRowBox(shorthandRows[2], "Inherited");
+                FieldBox thirdText = FindEffectRowBox(shorthandRows[2], "Text");
+                Check("cardedit page shows the shorthand text read-only",
+                    firstPreview != null && firstPreview.Input.ReadOnly &&
+                    firstPreview.Input.Text == "【自】简写正文一",
+                    firstPreview == null ? "null" : firstPreview.Input.Text);
+                Check("cardedit page keeps the own text out of the preview",
+                    firstText != null && firstText.Input.Text.Length == 0,
+                    firstText == null ? "null" : firstText.Input.Text);
+                Check("cardedit page keeps the own text of the third 效果",
+                    thirdText != null && thirdText.Input.Text == "自己的文字",
+                    thirdText == null ? "null" : thirdText.Input.Text);
+                Check("cardedit page hides the preview without a shorthand",
+                    thirdPreview != null &&
+                    EffectRowPreviewHeight(shorthandRows[0]) > 0 &&
+                    EffectRowPreviewHeight(shorthandRows[2]) == 0,
+                    thirdPreview == null ? "null" :
+                        EffectRowPreviewHeight(shorthandRows[0]) + "/" +
+                        EffectRowPreviewHeight(shorthandRows[2]));
+                // 标题跟 内容 / 代码 一样是普通的一行小标题，只读框在它下面占满
+                // 整列：不再缩成左边一列标签 + 右边一条窄框。
+                LayOutDeep(page);
+                Label shorthandCaption = EffectRowLabel(shorthandRows[0],
+                    "InheritedCaption");
+                Control shorthandBand = EffectRowControl(shorthandRows[0],
+                    "InheritedCell");
+                int captionNeeded = shorthandCaption == null ? -1 :
+                    TextRenderer.MeasureText(shorthandCaption.Text,
+                        shorthandCaption.Font).Width;
+                Check("cardedit page titles the 简写 band like the other boxes",
+                    shorthandCaption != null &&
+                    shorthandCaption.Text == "效果 1 · 简写提供（只读）",
+                    shorthandCaption == null ? "null" : shorthandCaption.Text);
+                Check("cardedit page shows the whole 简写 caption",
+                    shorthandCaption != null && captionNeeded > 0 &&
+                    shorthandCaption.Width >= captionNeeded,
+                    captionNeeded + " → " + (shorthandCaption == null ? "null" :
+                        shorthandCaption.Width.ToString()));
+                Check("cardedit page puts the 简写 caption above its box",
+                    shorthandCaption != null && firstPreview != null &&
+                    shorthandBand != null &&
+                    shorthandCaption.Bottom <= firstPreview.Top &&
+                    shorthandCaption.Left <= firstPreview.Left + 3,
+                    shorthandCaption == null || firstPreview == null ? "null" :
+                        shorthandCaption.Bottom + " / " + firstPreview.Top);
+                Check("cardedit page fills the 简写 band with its box",
+                    shorthandBand != null && firstPreview != null &&
+                    firstPreview.Width >= shorthandBand.Width - 8 &&
+                    firstPreview.Left <= shorthandBand.Left + 1,
+                    (shorthandBand == null ? "null" : shorthandBand.Width.ToString()) +
+                        " / " + (firstPreview == null ? "null" :
+                        firstPreview.Width.ToString()));
+                // 框的高度就是行里给带子量出来的高度减去标题行 17 和间隙 2：
+                // 文字既不会被裁掉，也不会在下面留一条空。
+                Check("cardedit page fits the 简写 box to its height",
+                    firstPreview != null &&
+                    Math.Abs(firstPreview.Height -
+                        (EffectRowPreviewHeight(shorthandRows[0]) - 19)) <= 1 &&
+                    firstPreview.Input.Height >= firstPreview.Input.Font.Height,
+                    firstPreview == null ? "null" :
+                        firstPreview.Height + " / " + (EffectRowPreviewHeight(
+                            shorthandRows[0]) - 19) + " / " +
+                        firstPreview.Input.Height);
+                // 带子高度 = 标题行 17 + 文字行 + 框内上下留白 16 + 间隙 2，
+                // 所以一行简写约 51，两行约 69，都远小于一整块固定高度。
+                Check("cardedit page keeps the 简写 band to one text line",
+                    EffectRowPreviewHeight(shorthandRows[0]) >= 32 &&
+                    EffectRowPreviewHeight(shorthandRows[0]) <= 96,
+                    EffectRowPreviewHeight(shorthandRows[0]).ToString());
+                Check("cardedit page omits the empty 内容 box of a 简写 row",
+                    EffectRowTextHidden(shorthandRows[0]) &&
+                    EffectRowTextHidden(shorthandRows[1]) &&
+                    !EffectRowTextHidden(shorthandRows[2]),
+                    EffectRowTextHidden(shorthandRows[0]) + "/" +
+                    EffectRowTextHidden(shorthandRows[1]) + "/" +
+                    EffectRowTextHidden(shorthandRows[2]));
+
+                // 预览高度跟着文字行数走：一行就一行高，两行才两行高。
+                int oneLine = EffectRowPreviewHeight(shorthandRows[0]);
+                SetEffectRowInheritedText(page, shorthandRows[0],
+                    "【自】第一行\n【起】第二行");
+                int twoLines = EffectRowPreviewHeight(shorthandRows[0]);
+                SetEffectRowInheritedText(page, shorthandRows[0], "【自】简写正文一");
+                Check("cardedit page grows the 简写 band line by line",
+                    twoLines > oneLine &&
+                    EffectRowPreviewHeight(shorthandRows[0]) == oneLine,
+                    oneLine + " → " + twoLines);
+            }
+
+            CardEditorDraft readShorthand = page.ReadDraft();
+            IList<CardEffectPair> writePairs = readShorthand == null
+                ? new List<CardEffectPair>()
+                : CardEffectSplitter.PairDraftForWrite(readShorthand);
+            Check("cardedit page writes the shorthand card text back in place",
+                writePairs.Count == 3 &&
+                writePairs[0].Text.Length == 0 &&
+                writePairs[1].Text.Length == 0 &&
+                writePairs[2].Text == "自己的文字" &&
+                writePairs[2].Code.Contains("GainPower 1000"),
+                writePairs.Count + " / " +
+                (writePairs.Count > 2 ? writePairs[2].Text + " @ " +
+                    writePairs[2].Code.Replace("\n", " ") : "?"));
+
+            page.LoadDraft(two, null);
+            AddEditorEffectRow(page);
+            Check("cardedit page adds an 效果 row",
+                EditorEffectRows(page).Count == 3);
+            page.LoadDraft(draft, series.Folders);
+            Check("cardedit page drops the extra row on reload",
+                EditorEffectRows(page).Count == 1);
+
             Control detailPanel = FindEditorControl(page, "_referenceDetailPanel");
             if (detailPanel != null)
                 detailPanel.Visible = true;
@@ -2945,6 +3834,20 @@ internal static class SmokeTests
                 StatusText(page));
             SetEditorText(page, "_idBox", "TST/09-E102");
 
+            // A blank 卡号 in a multi-pack series must not offer the pack chips:
+            // the number picks the pack, so the row only appears once the
+            // number is ambiguous (or unknown). It used to stay filled when
+            // 添加卡片 was opened right after 修改卡片.
+            CardEditorDraft blankAdd = CardEditorDraft.CreateBlank(packSeries, null);
+            page.LoadDraft(blankAdd, packSeries.Folders);
+            bool blankChips = choicesField != null &&
+                (bool)choicesField.GetValue(page);
+            Check("cardedit add hides the pack row while the card number is empty",
+                !blankChips && !blankAdd.HasFolder,
+                "chips=" + blankChips + " / folder=" + blankAdd.FolderPath);
+            Check("cardedit add asks for the card number instead",
+                page.Subtitle.Contains("输入卡号后自动分配卡包"), page.Subtitle);
+
             page.UnloadDraft();
             Check("cardedit page drops the draft", page.Draft == null);
             Check("cardedit page did not close itself", closings == 0,
@@ -2980,6 +3883,88 @@ internal static class SmokeTests
         FieldInfo info = owner.GetType().GetField(field,
             BindingFlags.Instance | BindingFlags.NonPublic);
         return info == null ? null : info.GetValue(owner) as FieldBox;
+    }
+
+    /// <summary>The rows of the 中栏 效果 list, one per 效果.</summary>
+    private static System.Collections.IList EditorEffectRows(object owner)
+    {
+        FieldInfo info = owner.GetType().GetField("_effectRows",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        return info == null ? null : info.GetValue(owner) as System.Collections.IList;
+    }
+
+    /// <summary>Adds one empty 效果 row (the ＋ 添加效果 button path).</summary>
+    private static void AddEditorEffectRow(object owner)
+    {
+        MethodInfo method = owner.GetType().GetMethod("AddEffectRow",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        if (method != null)
+            method.Invoke(owner, new object[] { new CardEffectPair(), false });
+    }
+
+    /// <summary>One FieldBox of an 效果 row (`Text`, `Code` or `Inherited`).</summary>
+    private static FieldBox FindEffectRowBox(object row, string field)
+    {
+        if (row == null)
+            return null;
+        FieldInfo info = row.GetType().GetField(field,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return info == null ? null : info.GetValue(row) as FieldBox;
+    }
+
+    /// <summary>One labelled control of an 效果 row (`TextCaption`,
+    /// `CodeCaption` or `InheritedCaption`).</summary>
+    private static Label EffectRowLabel(object row, string field)
+    {
+        if (row == null)
+            return null;
+        FieldInfo info = row.GetType().GetField(field,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return info == null ? null : info.GetValue(row) as Label;
+    }
+
+    /// <summary>One wrapper of an 效果 row (`Cell`, `TextCell` or
+    /// `InheritedCell`), used to compare the room a band gives its parts.</summary>
+    private static Control EffectRowControl(object row, string field)
+    {
+        if (row == null)
+            return null;
+        FieldInfo info = row.GetType().GetField(field,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return info == null ? null : info.GetValue(row) as Control;
+    }
+
+    /// <summary>Height the row gives its 简写提供 preview, 0 without one.</summary>
+    private static int EffectRowPreviewHeight(object row)
+    {
+        if (row == null)
+            return -1;
+        FieldInfo info = row.GetType().GetField("InheritedHeight",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return info == null ? -1 : (int)info.GetValue(row);
+    }
+
+    /// <summary>True while the row hides its 效果内容 box because the
+    /// `*Shorthand` already prints the whole 效果.</summary>
+    private static bool EffectRowTextHidden(object row)
+    {
+        if (row == null)
+            return false;
+        FieldInfo info = row.GetType().GetField("TextHidden",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        return info != null && (bool)info.GetValue(row);
+    }
+
+    /// <summary>Feeds one 简写提供 text straight into an 效果 row, the same way
+    /// the page fills it when the card is loaded.</summary>
+    private static void SetEffectRowInheritedText(object page, object row, string text)
+    {
+        if (page == null || row == null)
+            return;
+        MethodInfo method = page.GetType().GetMethod("ApplyInheritedText",
+            BindingFlags.Instance | BindingFlags.NonPublic);
+        if (method != null)
+            method.Invoke(page, new object[] { row, text });
     }
 
     private static void SetEditorText(object owner, string field, string text)
@@ -3067,10 +4052,16 @@ internal static class SmokeTests
 
     private static List<WeissCard> ParseTestFolder(SeriesFolder folder)
     {
+        return ParseTestFolder(folder, CommonEffectLibrary.Empty);
+    }
+
+    private static List<WeissCard> ParseTestFolder(SeriesFolder folder,
+        CommonEffectLibrary commonEffects)
+    {
         var warnings = new List<string>();
         return CardDataParser.ParseFile(
             Path.Combine(folder.FullPath, "CardData.txt"),
-            folder, CommonEffectLibrary.Empty, warnings);
+            folder, commonEffects, warnings);
     }
 
     private static void TestCardEditorBlock()
@@ -3317,6 +4308,1137 @@ internal static class SmokeTests
                 !header.Contains("TST/05-E001"), header);
             Check("cardedit patch keeps a single card after renaming",
                 ParseTestFolder(folder).Count == 1, header);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// 保存 must not turn the 效果内容 a `*Shorthand` copies in from
+    /// CommonEffects.txt into a `Text` line. 编辑卡片 still shows that text for a
+    /// card that prints no 效果内容 of its own, so the card face reads complete,
+    /// but the block keeps only the shorthand and saving twice leaves the file
+    /// exactly as it was.
+    /// </summary>
+    private static void TestCardEditorShorthandText()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-shorthand-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+            string path = Path.Combine(root, "CardData.txt");
+            string commonPath = Path.Combine(root, "CommonEffects.txt");
+
+            File.WriteAllText(commonPath,
+                "Define: TestEncore\r\n" +
+                "Auto: Encore Discard 1 IsCharacter\r\n" +
+                "{\r\n" +
+                "}\r\n" +
+                "Text 【自】 简写效果 A\r\n" +
+                "Tag Encore\r\n",
+                new UTF8Encoding(false));
+            File.WriteAllText(path,
+                "Character: TST/06-E001\r\n" +
+                "Name 简写卡\r\n" +
+                "JPName テスト\r\n" +
+                "Color R\r\n" +
+                "Level 1\r\n" +
+                "Cost 0\r\n" +
+                "Power 5000\r\n" +
+                "Soul 1\r\n" +
+                "Trait1 テスト\r\n" +
+                "*TestEncore\r\n" +
+                "EndCard\r\n",
+                new UTF8Encoding(false));
+
+            CommonEffectLibrary library = CommonEffectLibrary.Load(commonPath);
+            WeissCard card = ParseTestFolder(folder, library)[0];
+            Check("cardedit shorthand shows the inherited text",
+                card.Text == "【自】 简写效果 A", card.Text);
+            Check("cardedit shorthand remembers the inherited text",
+                card.InheritedTextLines.Count == 1 &&
+                card.InheritedTextLines[0] == "【自】 简写效果 A",
+                card.InheritedTextLines.Count.ToString());
+
+            CardEditorDraft draft = CardEditorDraft.FromCard(card, folder);
+            Check("cardedit shorthand keeps the text in the editor",
+                draft.TextLines != null && draft.TextLines.Count == 1 &&
+                draft.TextLines[0] == "【自】 简写效果 A",
+                draft.TextLines == null
+                    ? "null"
+                    : string.Join(" / ", draft.TextLines.ToArray()));
+
+            draft.Level = 2;
+            CardWriteResult saved = CardDataWriter.Save(draft);
+            Check("cardedit shorthand save succeeds", saved.Success, saved.Message);
+
+            string after = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand keeps the shorthand line",
+                CountOccurrences(after, "*TestEncore") == 1, after);
+            Check("cardedit shorthand writes no Text line",
+                CountOccurrences(after, "Text ") == 0, after);
+            Check("cardedit shorthand writes the edited level",
+                after.Contains("Level 2"), after);
+
+            WeissCard reloaded = ParseTestFolder(folder, library)[0];
+            Check("cardedit shorthand still shows the text after a save",
+                reloaded.Text == "【自】 简写效果 A", reloaded.Text);
+            CardWriteResult again = CardDataWriter.Save(
+                CardEditorDraft.FromCard(reloaded, folder));
+            string twice = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand stays unchanged after a second save",
+                again.Success && twice == after, twice);
+
+            // Editing the 效果内容 itself must still reach the file.
+            CardEditorDraft edited = CardEditorDraft.FromCard(
+                ParseTestFolder(folder, library)[0], folder);
+            edited.TextLines[0] = "玩家改写的效果";
+            edited.Text = "玩家改写的效果";
+            CardWriteResult editedSave = CardDataWriter.Save(edited);
+            string rewritten = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand writes an edited text once",
+                editedSave.Success &&
+                CountOccurrences(rewritten, "Text 玩家改写的效果") == 1, rewritten);
+            Check("cardedit shorthand keeps the shorthand after an edit",
+                CountOccurrences(rewritten, "*TestEncore") == 1 &&
+                CountOccurrences(rewritten, "简写效果") == 0, rewritten);
+
+            // A block that already stored the expanded text heals on the next
+            // save: the shorthand puts the same 效果 back on load.
+            File.WriteAllText(path,
+                "Character: TST/06-E001\r\n" +
+                "Name 简写卡\r\n" +
+                "Level 1\r\n" +
+                "*TestEncore\r\n" +
+                "Text 自己的效果\r\n" +
+                "Text 【自】 简写效果 A\r\n" +
+                "EndCard\r\n",
+                new UTF8Encoding(false));
+            CardWriteResult healed = CardDataWriter.Save(CardEditorDraft.FromCard(
+                ParseTestFolder(folder, library)[0], folder));
+            string cleaned = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand drops a duplicated inherited text",
+                healed.Success && CountOccurrences(cleaned, "Text ") == 1 &&
+                CountOccurrences(cleaned, "简写效果") == 0, cleaned);
+            Check("cardedit shorthand keeps the own text when it heals",
+                CountOccurrences(cleaned, "Text 自己的效果") == 1, cleaned);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// A card whose 效果 are written as `*Shorthand` lines keeps one row per
+    /// shorthand: 编辑卡片 shows the `Text` line that belongs to that row, not
+    /// the text the shorthand brings in as well. CardData.txt writes
+    /// `*A` + `Text T1` + `*B` + `Text T2`, so an untouched card must write every
+    /// `Text` line back below its own shorthand — no 效果 stored twice, nothing
+    /// collected at the end of the block.
+    /// </summary>
+    private static void TestCardEditorShorthandPairs()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-shorthandpairs-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+            string path = Path.Combine(root, "CardData.txt");
+            string commonPath = Path.Combine(root, "CommonEffects.txt");
+
+            File.WriteAllText(commonPath,
+                "Define: ShoutA\r\n" +
+                "Auto: OnPlay\r\n" +
+                "{\r\n" +
+                "        GainPower 1000\r\n" +
+                "}\r\n" +
+                "Text 简写自带的文字 A\r\n" +
+                "\r\n" +
+                "Define: DrawB\r\n" +
+                "Auto: OnAttack\r\n" +
+                "{\r\n" +
+                "        Draw 1\r\n" +
+                "}\r\n" +
+                "Text 简写自带的文字 B\r\n",
+                new UTF8Encoding(false));
+            File.WriteAllText(path,
+                "Character: TST/07-E001\r\n" +
+                "Name 双简写卡\r\n" +
+                "Color R\r\n" +
+                "Level 1\r\n" +
+                "*ShoutA\r\n" +
+                "Text 卡面文字一\r\n" +
+                "*DrawB\r\n" +
+                "Text 卡面文字二\r\n" +
+                "EndCard\r\n",
+                new UTF8Encoding(false));
+
+            CommonEffectLibrary library = CommonEffectLibrary.Load(commonPath);
+            List<WeissCard> cards = ParseTestFolder(folder, library);
+            Check("cardedit shorthand pairs parses one card", cards.Count == 1,
+                cards.Count.ToString());
+            if (cards.Count != 1)
+                return;
+            WeissCard card = cards[0];
+            Check("cardedit shorthand pairs remembers both inherited texts",
+                card.InheritedTextLines.Count == 2,
+                card.InheritedTextLines.Count.ToString());
+            Check("cardedit shorthand pairs keeps the file order of the text",
+                card.TextLines.Count == 4 && card.TextLines[1] == "卡面文字一" &&
+                card.TextLines[3] == "卡面文字二",
+                string.Join(" / ", card.TextLines.ToArray()));
+
+            CardEditorDraft draft = CardEditorDraft.FromCard(card, folder);
+            IList<CardEffectPair> pairs = CardEffectSplitter.PairDraft(draft);
+            Check("cardedit shorthand pairs shows one row per shorthand",
+                pairs.Count == 2, pairs.Count.ToString());
+            if (pairs.Count != 2)
+                return;
+            Check("cardedit shorthand pairs shows the own text of row 1",
+                pairs[0].Text == "卡面文字一" &&
+                pairs[0].Code.IndexOf("*ShoutA", StringComparison.Ordinal) >= 0,
+                pairs[0].Text + " / " + pairs[0].Code);
+            Check("cardedit shorthand pairs shows the own text of row 2",
+                pairs[1].Text == "卡面文字二" &&
+                pairs[1].Code.IndexOf("*DrawB", StringComparison.Ordinal) >= 0,
+                pairs[1].Text + " / " + pairs[1].Code);
+
+            // 改卡名：效果区一个字节都不该动。
+            draft.Name = "改名卡";
+            CardWriteResult saved = CardDataWriter.Save(draft);
+            string after = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand pairs save succeeds", saved.Success,
+                saved.Message);
+            Check("cardedit shorthand pairs writes the new name",
+                after.Contains("Name 改名卡"), after);
+            Check("cardedit shorthand pairs keeps exactly two Text lines",
+                CountOccurrences(after, "Text ") == 2, after);
+            Check("cardedit shorthand pairs writes 内容 1 below 简写 1",
+                IsBetween(after, "*ShoutA", "Text 卡面文字一", "*DrawB"), after);
+            Check("cardedit shorthand pairs writes 内容 2 below 简写 2",
+                IsAfter(after, "*DrawB", "Text 卡面文字二"), after);
+            Check("cardedit shorthand pairs writes no inherited text",
+                CountOccurrences(after, "简写自带的文字") == 0, after);
+
+            CardWriteResult again = CardDataWriter.Save(
+                CardEditorDraft.FromCard(ParseTestFolder(folder, library)[0], folder));
+            string twice = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand pairs leaves the block alone on a second save",
+                again.Success && twice == after, twice);
+
+            // 只改第二条效果：第二条 Text 换掉，第一条留在自己的简写下面。
+            CardEditorDraft edited = CardEditorDraft.FromCard(
+                ParseTestFolder(folder, library)[0], folder);
+            edited.TextLines = new List<string> { "卡面文字一", "卡面文字二改" };
+            edited.Text = "卡面文字一\n卡面文字二改";
+            CardWriteResult editResult = CardDataWriter.Save(edited);
+            string rewritten = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand pairs writes the edited text once",
+                editResult.Success &&
+                CountOccurrences(rewritten, "Text 卡面文字二改") == 1, rewritten);
+            Check("cardedit shorthand pairs keeps the other text in place",
+                CountOccurrences(rewritten, "Text ") == 2 &&
+                IsBetween(rewritten, "*ShoutA", "Text 卡面文字一", "*DrawB"),
+                rewritten);
+            Check("cardedit shorthand pairs keeps both shorthands once",
+                CountOccurrences(rewritten, "*ShoutA") == 1 &&
+                CountOccurrences(rewritten, "*DrawB") == 1, rewritten);
+            Check("cardedit shorthand pairs writes no inherited text after an edit",
+                CountOccurrences(rewritten, "简写自带的文字") == 0, rewritten);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>True when `first` ... `second` ... `third` appear in that
+    /// order, so a `Text` line can be checked against the shorthand above and
+    /// the one below it.</summary>
+    private static bool IsBetween(string text, string first, string second,
+        string third)
+    {
+        int a = text.IndexOf(first, StringComparison.Ordinal);
+        int b = text.IndexOf(second, StringComparison.Ordinal);
+        int c = text.IndexOf(third, StringComparison.Ordinal);
+        return a >= 0 && b > a && c > b;
+    }
+
+    /// <summary>True when `first` appears before `second`.</summary>
+    private static bool IsAfter(string text, string first, string second)
+    {
+        int a = text.IndexOf(first, StringComparison.Ordinal);
+        int b = text.IndexOf(second, StringComparison.Ordinal);
+        return a >= 0 && b > a;
+    }
+
+    /// <summary>
+    /// 一条效果写成 `*Shorthand` + `Text` 时，编辑卡片的中栏要同时给出这两块
+    /// 文字：简写从 CommonEffects.txt 带进来的正文（只读预览）和卡块自己写的
+    /// `Text` 行（可编辑）。以前只取“自己的”文字，简写那一段的内容框于是空白，
+    /// 后面的效果还整体往前挪一格，保存也跟着写错位。
+    /// </summary>
+    private static void TestCardEditorShorthandRow()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-shorthandrow-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+            string path = Path.Combine(root, "CardData.txt");
+            string commonPath = Path.Combine(root, "CommonEffects.txt");
+
+            File.WriteAllText(commonPath,
+                "Define: EncoreAll\r\n" +
+                "Auto: OnAttack\r\n" +
+                "{\r\n" +
+                "        GainPower 2000\r\n" +
+                "}\r\n" +
+                "Text 【自】简写正文一\r\n" +
+                "Text 【自】简写正文二\r\n" +
+                "\r\n" +
+                "Define: HealOne\r\n" +
+                "Act: Rest\r\n" +
+                "{\r\n" +
+                "        Heal 1\r\n" +
+                "}\r\n" +
+                "Text 【起】简写正文三\r\n",
+                new UTF8Encoding(false));
+            File.WriteAllText(path,
+                "Character: TST/08-E001\r\n" +
+                "Name 简写行卡\r\n" +
+                "Level 1\r\n" +
+                "*EncoreAll\r\n" +
+                "Text 自己的正文一\r\n" +
+                "*HealOne\r\n" +
+                "Auto: OnPlay\r\n" +
+                "{\r\n" +
+                "        Draw 1\r\n" +
+                "}\r\n" +
+                "Text 自动的正文\r\n" +
+                "EndCard\r\n",
+                new UTF8Encoding(false));
+
+            CommonEffectLibrary library = CommonEffectLibrary.Load(commonPath);
+            List<WeissCard> cards = ParseTestFolder(folder, library);
+            Check("cardedit shorthand row parses one card", cards.Count == 1,
+                cards.Count.ToString());
+            if (cards.Count != 1)
+                return;
+            WeissCard card = cards[0];
+
+            Check("cardedit shorthand row keeps the file order of the text",
+                card.TextLines.Count == 5 &&
+                card.TextLines[0] == "【自】简写正文一" &&
+                card.TextLines[2] == "自己的正文一" &&
+                card.TextLines[3] == "【起】简写正文三" &&
+                card.TextLines[4] == "自动的正文",
+                string.Join(" / ", card.TextLines.ToArray()));
+            Check("cardedit shorthand row marks the inherited text",
+                card.TextInherited.Count == 5 &&
+                card.TextInherited[0] && card.TextInherited[1] &&
+                !card.TextInherited[2] && card.TextInherited[3] &&
+                !card.TextInherited[4],
+                string.Join(",", card.TextInherited.ToArray()));
+            Check("cardedit shorthand row numbers the blocks",
+                card.TextBlockIndexes.Count == 5 &&
+                card.TextBlockIndexes[0] == 0 && card.TextBlockIndexes[2] == 0 &&
+                card.TextBlockIndexes[3] == 1 && card.TextBlockIndexes[4] == 2,
+                string.Join(",", card.TextBlockIndexes.ToArray()));
+
+            CardEditorDraft draft = CardEditorDraft.FromCard(card, folder);
+            IList<CardEffectPair> pairs = CardEffectSplitter.PairDraft(draft);
+            Check("cardedit shorthand row shows one row per 效果",
+                pairs.Count == 3, pairs.Count.ToString());
+            if (pairs.Count != 3)
+                return;
+            Check("cardedit shorthand row shows the own text of row 1",
+                pairs[0].Text == "自己的正文一", pairs[0].Text);
+            Check("cardedit shorthand row shows the inherited text of row 1",
+                pairs[0].InheritedText == "【自】简写正文一\n【自】简写正文二",
+                pairs[0].InheritedText);
+            Check("cardedit shorthand row shows the inherited text of row 2",
+                pairs[1].InheritedText == "【起】简写正文三", pairs[1].InheritedText);
+            Check("cardedit shorthand row keeps row 2 without own text",
+                pairs[1].Text == string.Empty, pairs[1].Text);
+            Check("cardedit shorthand row keeps 内容 3 in row 3",
+                pairs[2].Text == "自动的正文" &&
+                pairs[2].InheritedText == string.Empty,
+                pairs[2].Text + " / " + pairs[2].InheritedText);
+            Check("cardedit shorthand row keeps the shorthand in its own row",
+                pairs[0].Code == "*EncoreAll" && pairs[1].Code == "*HealOne" &&
+                pairs[2].Code.StartsWith("Auto: OnPlay", StringComparison.Ordinal),
+                pairs[0].Code + " / " + pairs[1].Code + " / " + pairs[2].Code);
+
+            List<string> own = CardEffectSplitter.OwnTextLines(draft);
+            Check("cardedit shorthand row writes only the own text",
+                string.Join("|", own.ToArray()) == "自己的正文一|自动的正文",
+                string.Join("|", own.ToArray()));
+
+            // 改卡名：两块自有文字都要留在自己的代码下面，简写正文一个字都不写回。
+            draft.Name = "改名卡";
+            CardWriteResult saved = CardDataWriter.Save(draft);
+            string after = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand row save succeeds", saved.Success, saved.Message);
+            Check("cardedit shorthand row writes the new name",
+                after.Contains("Name 改名卡"), after);
+            Check("cardedit shorthand row keeps two Text lines",
+                CountOccurrences(after, "Text ") == 2, after);
+            Check("cardedit shorthand row writes 内容 1 below 简写 1",
+                IsBetween(after, "*EncoreAll", "Text 自己的正文一", "*HealOne"), after);
+            Check("cardedit shorthand row writes 内容 3 below 代码 3",
+                IsAfter(after, "Auto: OnPlay", "Text 自动的正文"), after);
+            Check("cardedit shorthand row writes no inherited text",
+                CountOccurrences(after, "简写正文") == 0, after);
+
+            CardWriteResult again = CardDataWriter.Save(
+                CardEditorDraft.FromCard(ParseTestFolder(folder, library)[0], folder));
+            string twice = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit shorthand row leaves the block alone on a second save",
+                again.Success && twice == after, twice);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// A climax shorthand carries tags of its own: `*2SoulClimax` in
+    /// CommonEffects.txt writes `Trigger DoubleSoul` and `*RedStockSoul` writes
+    /// `Color R`. 编辑卡片 shows those values, but 保存 must not spell them out
+    /// inside the block — the shorthand writes them again on every load, so the
+    /// card would carry the same trigger (or colour) twice. A tag the player
+    /// really picks still becomes a line of its own.
+    /// </summary>
+    private static void TestCardEditorClimaxShorthand()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-climaxshorthand-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+            string path = Path.Combine(root, "CardData.txt");
+            string commonPath = Path.Combine(root, "CommonEffects.txt");
+
+            File.WriteAllText(commonPath,
+                "Define: 2SoulClimax\r\n" +
+                "\tTrigger DoubleSoul\r\n" +
+                "\tTag Climax_2Soul\r\n" +
+                "\tCont: GiveAll\r\n" +
+                "\t{\r\n" +
+                "\t\tGainSoul 2\r\n" +
+                "\t}\r\n" +
+                "\tText 【永】你所有的角色魂值 +2 。\r\n" +
+                "\r\n" +
+                "Define: RedStockSoul\r\n" +
+                "\tColor R\r\n" +
+                "\tTrigger DoubleSoul\r\n" +
+                "\tAuto: OnPlay\r\n" +
+                "\t{\r\n" +
+                "\t\tMoveCard Stock\r\n" +
+                "\t}\r\n" +
+                "\tText 【自】你控室1枚红色的卡放到库存区。\r\n",
+                new UTF8Encoding(false));
+
+            string original =
+                "Climax: TST/08-E001\r\n" +
+                "Name 二魂高潮\r\n" +
+                "Color Y\r\n" +
+                "*2SoulClimax\r\n" +
+                "EndCard\r\n" +
+                "\r\n" +
+                "Climax: TST/08-E002\r\n" +
+                "Name 红色高潮\r\n" +
+                "*RedStockSoul\r\n" +
+                "EndCard\r\n";
+            File.WriteAllText(path, original, new UTF8Encoding(false));
+
+            CommonEffectLibrary library = CommonEffectLibrary.Load(commonPath);
+            List<WeissCard> cards = ParseTestFolder(folder, library);
+            Check("cardedit climax shorthand parses both cards", cards.Count == 2,
+                cards.Count.ToString());
+            WeissCard soul = cards[0];
+            WeissCard red = cards[1];
+            Check("cardedit climax shorthand shows the inherited trigger",
+                soul.Trigger == TriggerIcon.DoubleSoul &&
+                soul.InheritedTrigger == TriggerIcon.DoubleSoul,
+                soul.Trigger + " / " + soul.InheritedTrigger);
+            Check("cardedit climax shorthand shows the inherited colour",
+                red.Color == CardColor.Red && red.InheritedColor == CardColor.Red,
+                red.Color + " / " + red.InheritedColor);
+
+            CardWriteResult saved = CardDataWriter.Save(
+                CardEditorDraft.FromCard(soul, folder));
+            CardWriteResult savedRed = CardDataWriter.Save(
+                CardEditorDraft.FromCard(red, folder));
+            string after = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit climax shorthand save succeeds",
+                saved.Success && savedRed.Success,
+                saved.Message + " / " + savedRed.Message);
+            Check("cardedit climax shorthand writes no trigger line",
+                CountOccurrences(after, "Trigger ") == 0, after);
+            Check("cardedit climax shorthand writes no colour line",
+                Array.IndexOf(ReadCardBlock(after, "TST/08-E002"), "Color B") < 0,
+                string.Join(" | ", ReadCardBlock(after, "TST/08-E002")));
+            Check("cardedit climax shorthand writes no Text line",
+                CountOccurrences(after, "Text ") == 0, after);
+            Check("cardedit climax shorthand stays byte identical",
+                after == original, after);
+
+            // A trigger the player picks still becomes a line of its own.
+            CardEditorDraft picked = CardEditorDraft.FromCard(soul, folder);
+            Check("cardedit climax shorthand draft keeps the inherited trigger",
+                picked.Trigger == TriggerIcon.DoubleSoul &&
+                picked.InheritedTrigger == TriggerIcon.DoubleSoul,
+                picked.Trigger + " / " + picked.InheritedTrigger);
+            picked.Trigger = TriggerIcon.Book;
+            CardWriteResult pickSave = CardDataWriter.Save(picked);
+            string chosen = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit climax shorthand writes the picked trigger",
+                pickSave.Success && CountOccurrences(chosen, "Trigger Book") == 1,
+                chosen);
+            Check("cardedit climax shorthand keeps the shorthand after the edit",
+                CountOccurrences(chosen, "*2SoulClimax") == 1, chosen);
+
+            WeissCard reloaded = ParseTestFolder(folder, library)[0];
+            Check("cardedit climax shorthand reloads the picked trigger",
+                reloaded.Trigger == TriggerIcon.Book,
+                reloaded.Trigger.ToString());
+            CardWriteResult again = CardDataWriter.Save(
+                CardEditorDraft.FromCard(reloaded, folder));
+            string twice = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit climax shorthand writes the trigger once",
+                again.Success && twice == chosen, twice);
+
+            // A colour the shorthand sets behaves the same way.
+            CardEditorDraft colour = CardEditorDraft.FromCard(
+                ParseTestFolder(folder, library)[1], folder);
+            colour.Color = CardColor.Blue;
+            CardWriteResult colourSave = CardDataWriter.Save(colour);
+            string colourFile = File.ReadAllText(path, Encoding.UTF8);
+            string[] colourBlock = ReadCardBlock(colourFile, "TST/08-E002");
+            Check("cardedit climax shorthand writes the picked colour",
+                colourSave.Success && Array.IndexOf(colourBlock, "Color B") >= 0,
+                string.Join(" | ", colourBlock));
+            WeissCard colourReload = ParseTestFolder(folder, library)[1];
+            Check("cardedit climax shorthand reloads the picked colour",
+                colourReload.Color == CardColor.Blue,
+                colourReload.Color.ToString());
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// 保存 of an alt-art card must leave its `Clone xxx` block alone: 编辑卡片
+    /// shows the base card's fields and 效果, but the block keeps just the Clone
+    /// line until the player really changes a value.
+    /// </summary>
+    private static void TestCardEditorCloneBlock()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-cloneblock-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+            string path = Path.Combine(root, "CardData.txt");
+            const string original =
+                "Character: TST/07-E001\r\n" +
+                "Name 基卡\r\n" +
+                "JPName キカード\r\n" +
+                "Color R\r\n" +
+                "Level 1\r\n" +
+                "Cost 0\r\n" +
+                "Power 6000\r\n" +
+                "Soul 1\r\n" +
+                "Trait1 テスト\r\n" +
+                "Auto: OnPlay\r\n" +
+                "{\r\n" +
+                "        Draw 1\r\n" +
+                "}\r\n" +
+                "Text 基卡效果\r\n" +
+                "EndCard\r\n" +
+                "\r\n" +
+                "Character: TST/07-E002\r\n" +
+                "Clone TST/07-E001\r\n" +
+                "EndCard\r\n";
+            File.WriteAllText(path, original, new UTF8Encoding(false));
+
+            List<WeissCard> cards = ParseTestFolder(folder);
+            Check("cardedit clone block parses both cards", cards.Count == 2,
+                cards.Count.ToString());
+            WeissCard clone = cards.Count > 1 ? cards[1] : null;
+            Check("cardedit clone block inherits the base effect in the editor",
+                clone != null && clone.EffectCode.Contains("Draw 1"),
+                clone == null ? "null" : clone.EffectCode);
+            Check("cardedit clone block inherits the base text in the editor",
+                clone != null && clone.Text == "基卡效果",
+                clone == null ? "null" : clone.Text);
+
+            CardWriteResult saved = CardDataWriter.Save(
+                CardEditorDraft.FromCard(clone, folder));
+            Check("cardedit clone block save succeeds", saved.Success,
+                saved.Message);
+
+            string after = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit clone block stays three lines",
+                ReadCardBlock(after, "TST/07-E002").Length == 3, after);
+            Check("cardedit clone block stays byte identical", after == original,
+                after);
+            Check("cardedit clone block writes no inherited effect",
+                CountOccurrences(after, "Draw 1") == 1 &&
+                CountOccurrences(after, "Text ") == 1 &&
+                CountOccurrences(after, "Name 基卡") == 1, after);
+
+            // A player edit still reaches the block, and only that field does.
+            CardEditorDraft edited = CardEditorDraft.FromCard(
+                ParseTestFolder(folder)[1], folder);
+            edited.Level = 2;
+            CardWriteResult changedSave = CardDataWriter.Save(edited);
+            string changedFile = File.ReadAllText(path, Encoding.UTF8);
+            string[] changedBlock = ReadCardBlock(changedFile, "TST/07-E002");
+            Check("cardedit clone block writes only the edited field",
+                changedSave.Success && changedBlock.Length == 4 &&
+                changedBlock[2] == "Level 2",
+                string.Join(" | ", changedBlock));
+            Check("cardedit clone block keeps inheriting after an edit",
+                CountOccurrences(changedFile, "Draw 1") == 1 &&
+                CountOccurrences(changedFile, "Name 基卡") == 1, changedFile);
+
+            WeissCard reloaded = ParseTestFolder(folder)[1];
+            Check("cardedit clone block reloads the edit",
+                reloaded.Level == 2 && reloaded.Text == "基卡效果",
+                reloaded.Level + " / " + reloaded.Text);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// The alt-art cards of a real pack keep their `Clone xxx` block when the
+    /// editor saves them unchanged. The CardData file is copied to a temp
+    /// folder first, so the game data is only ever read.
+    /// </summary>
+    private static void TestRealCloneBlocks(SeriesDefinition series)
+    {
+        if (series == null)
+            return;
+
+        string dataRoot = DataPathResolver.Resolve(null);
+        if (string.IsNullOrEmpty(dataRoot))
+        {
+            Check("cardedit real clone block finds the game data", false,
+                "no data root");
+            return;
+        }
+
+        CommonEffectLibrary library = CommonEffectLibrary.Load(
+            Path.Combine(dataRoot, "CommonEffects.txt"));
+        int tested = 0;
+        foreach (WeissCard card in series.EnumerateCards())
+        {
+            if (tested >= 3)
+                break;
+            if (!card.IsClone || string.IsNullOrEmpty(card.FolderPath))
+                continue;
+
+            string folderPath = Path.Combine(dataRoot, "Cards",
+                card.FolderPath.Replace('/', Path.DirectorySeparatorChar));
+            string path = CardDataWriter.ResolveCardFilePath(folderPath,
+                "CardData");
+            if (!File.Exists(path))
+                continue;
+
+            string source = File.ReadAllText(path, Encoding.UTF8);
+            string[] originalBlock = ReadCardBlock(source, card.Id);
+            if (originalBlock.Length != 3)
+                continue;   // only the plain header / Clone / EndCard blocks
+
+            string root = Path.Combine(Path.GetTempPath(),
+                "ws-realclone-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(root);
+                string copy = Path.Combine(root, "CardData.txt");
+                File.Copy(path, copy, true);
+
+                var folder = new SeriesFolder();
+                folder.SeriesName = card.SeriesName;
+                folder.SetName = card.SetName;
+                folder.FolderPath = card.FolderPath;
+                folder.FullPath = root;
+                folder.FileName = "CardData";
+
+                List<WeissCard> parsed = ParseTestFolder(folder, library);
+                WeissCard draftCard = null;
+                for (int j = 0; j < parsed.Count && draftCard == null; j++)
+                {
+                    if (string.Equals(parsed[j].Id, card.Id,
+                        StringComparison.OrdinalIgnoreCase))
+                    {
+                        draftCard = parsed[j];
+                    }
+                }
+                if (draftCard == null)
+                    continue;
+
+                CardWriteResult result = CardDataWriter.Save(
+                    CardEditorDraft.FromCard(draftCard, folder));
+                string[] afterBlock = ReadCardBlock(
+                    File.ReadAllText(copy, Encoding.UTF8), card.Id);
+                Check("cardedit real clone block keeps " + card.Id,
+                    result.Success &&
+                    string.Equals(string.Join("\n", afterBlock),
+                        string.Join("\n", originalBlock), StringComparison.Ordinal),
+                    result.Message + " / " + string.Join(" | ", afterBlock));
+                tested++;
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+        }
+
+        Check("cardedit real clone block tested some cards", tested > 0,
+            tested.ToString());
+    }
+
+    /// <summary>
+    /// 保存一张用 `*Shorthand` 写的真实卡，不改效果时卡块逐行不变：简写从
+    /// CommonEffects.txt 带进来的文字不会被写进 `Text` 行，每条 `Text` 也留在
+    /// 自己那条简写下面，第二次保存同样不动一个字节。CardData 文件先复制到
+    /// 临时目录，游戏数据只读。
+    /// </summary>
+    private static void TestRealShorthandBlocks(SeriesDefinition series)
+    {
+        if (series == null)
+            return;
+
+        string dataRoot = DataPathResolver.Resolve(null);
+        if (string.IsNullOrEmpty(dataRoot))
+        {
+            Check("cardedit real shorthand block finds the game data", false,
+                "no data root");
+            return;
+        }
+
+        CommonEffectLibrary library = CommonEffectLibrary.Load(
+            Path.Combine(dataRoot, "CommonEffects.txt"));
+        int tested = 0;
+        foreach (WeissCard card in series.EnumerateCards())
+        {
+            if (tested >= 3)
+                break;
+            if (card.IsClone || string.IsNullOrEmpty(card.FolderPath) ||
+                string.IsNullOrEmpty(card.EffectCode))
+            {
+                continue;
+            }
+
+            string folderPath = Path.Combine(dataRoot, "Cards",
+                card.FolderPath.Replace('/', Path.DirectorySeparatorChar));
+            string path = CardDataWriter.ResolveCardFilePath(folderPath,
+                "CardData");
+            if (!File.Exists(path))
+                continue;
+
+            string[] originalBlock = ReadCardBlock(
+                File.ReadAllText(path, Encoding.UTF8), card.Id);
+            string originalEffects = string.Join("\n", EffectLines(originalBlock));
+            if (!HasShorthandText(originalEffects))
+                continue;
+
+            string root = Path.Combine(Path.GetTempPath(),
+                "ws-realshorthand-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                Directory.CreateDirectory(root);
+                string copy = Path.Combine(root, "CardData.txt");
+                File.Copy(path, copy, true);
+
+                var folder = new SeriesFolder();
+                folder.SeriesName = card.SeriesName;
+                folder.SetName = card.SetName;
+                folder.FolderPath = card.FolderPath;
+                folder.FullPath = root;
+                folder.FileName = "CardData";
+
+                WeissCard draftCard = FindTestCard(
+                    ParseTestFolder(folder, library), card.Id);
+                if (draftCard == null)
+                    continue;
+
+                CardWriteResult result = CardDataWriter.Save(
+                    CardEditorDraft.FromCard(draftCard, folder));
+                string afterFirst = File.ReadAllText(copy, Encoding.UTF8);
+                string[] afterBlock = ReadCardBlock(afterFirst, card.Id);
+                Check("cardedit real shorthand block keeps " + card.Id,
+                    result.Success &&
+                    string.Equals(originalEffects,
+                        string.Join("\n", EffectLines(afterBlock)),
+                        StringComparison.Ordinal),
+                    result.Message + " / " +
+                    string.Join(" | ", EffectLines(afterBlock)));
+
+                WeissCard reloaded = FindTestCard(
+                    ParseTestFolder(folder, library), card.Id);
+                if (reloaded == null)
+                    continue;
+                CardWriteResult again = CardDataWriter.Save(
+                    CardEditorDraft.FromCard(reloaded, folder));
+                string afterSecond = File.ReadAllText(copy, Encoding.UTF8);
+                Check("cardedit real shorthand block stays put on a second save " +
+                    card.Id, again.Success && afterSecond == afterFirst,
+                    again.Success ? "file changed" : again.Message);
+                tested++;
+            }
+            finally
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+        }
+
+        Check("cardedit real shorthand block tested some cards", tested > 0,
+            tested.ToString());
+    }
+
+    /// <summary>Card with the given id, or null.</summary>
+    private static WeissCard FindTestCard(IList<WeissCard> cards, string id)
+    {
+        if (cards == null)
+            return null;
+        for (int i = 0; i < cards.Count; i++)
+        {
+            if (string.Equals(cards[i].Id, id, StringComparison.OrdinalIgnoreCase))
+                return cards[i];
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// 效果区 of a card block: every line 编辑卡片 does not own as a field, so
+    /// `Text` lines, `*Shorthand` lines and the `{ }` bodies stay in it.
+    /// </summary>
+    private static List<string> EffectLines(string[] block)
+    {
+        var lines = new List<string>();
+        if (block == null)
+            return lines;
+        for (int i = 0; i < block.Length; i++)
+        {
+            string line = (block[i] ?? string.Empty).TrimEnd();
+            if (IsTestFieldLine(line))
+                continue;
+            lines.Add(line);
+        }
+        return lines;
+    }
+
+    /// <summary>
+    /// True for a `Key value` line of a field the editor owns besides 效果内容
+    /// (`Text` counts as 效果内容 and stays in the 效果区).
+    /// </summary>
+    private static bool IsTestFieldLine(string line)
+    {
+        string trimmed = line.Trim();
+        if (trimmed.Length == 0 ||
+            trimmed.StartsWith("*", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        int space = trimmed.IndexOf(' ');
+        string token = (space < 0 ? trimmed : trimmed.Substring(0, space))
+            .ToLowerInvariant();
+        switch (token)
+        {
+            case "name":
+            case "jpname":
+            case "image":
+            case "color":
+            case "level":
+            case "cost":
+            case "power":
+            case "soul":
+            case "trigger":
+            case "backup":
+            case "trait1":
+            case "trait2":
+            case "trait3":
+            case "combo":
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>True when the 效果区 holds a `*Shorthand` and a `Text` line.</summary>
+    private static bool HasShorthandText(string effects)
+    {
+        bool shorthand = false;
+        bool text = false;
+        string[] lines = CardDataWriter.SplitLines(effects);
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string trimmed = (lines[i] ?? string.Empty).Trim();
+            if (trimmed.StartsWith("*", StringComparison.Ordinal))
+                shorthand = true;
+            else if (trimmed.StartsWith("Text", StringComparison.OrdinalIgnoreCase))
+                text = true;
+        }
+        return shorthand && text;
+    }
+
+    /// <summary>
+    /// Every card of a real pack keeps its 效果 when the editor pairs 效果内容
+    /// with 效果代码: no ability line is dropped, added or reordered, and the
+    /// 效果内容 keeps every `Text` line the block spells out — whatever mixture
+    /// of `Text` lines, `*Shorthand` lines and hidden trigger abilities the card
+    /// carries. The text a `*Shorthand` copies in sits on its own row as the
+    /// read-only 简写提供 preview, so a shorthand-only 效果 no longer leaves its
+    /// 内容 box blank and pushes every later 效果 one row up.
+    /// </summary>
+    private static void TestRealEffectPairs(SeriesDefinition series)
+    {
+        int cards = 0;
+        int multiRow = 0;
+        int shorthandRows = 0;
+        string broken = null;
+
+        for (int f = 0; f < series.Folders.Count && broken == null; f++)
+        {
+            SeriesFolder folder = series.Folders[f];
+            for (int c = 0; c < folder.Cards.Count && broken == null; c++)
+            {
+                WeissCard card = folder.Cards[c];
+                if (card.EffectCode.Length == 0 && card.TextLines.Count == 0)
+                    continue;
+
+                CardEditorDraft draft = CardEditorDraft.FromCard(card, folder);
+                IList<CardEffectPair> pairs = CardEffectSplitter.PairDraft(draft);
+                cards++;
+                if (pairs.Count > 1)
+                    multiRow++;
+                for (int p = 0; p < pairs.Count; p++)
+                {
+                    if (pairs[p].FromShorthand)
+                        shorthandRows++;
+                }
+
+                // 编辑卡片 shows the card face complete: the text the block
+                // prints itself plus the text its `*Shorthand` lines bring in.
+                string expected = string.Join("\n", card.TextLines.ToArray());
+                string texts = JoinPairParts(pairs, true);
+                if (!SameLines(texts, expected))
+                {
+                    broken = card.Id + " 内容: " + texts + " != " + expected;
+                    break;
+                }
+
+                string code = JoinPairParts(pairs, false);
+                if (!SameLines(code, card.EffectCode))
+                {
+                    broken = card.Id + " 代码: " + code + " != " + card.EffectCode;
+                    break;
+                }
+            }
+        }
+
+        Check("cardedit pairs every real card without losing a line",
+            broken == null && cards > 100,
+            (broken ?? "") + " cards=" + cards);
+        Check("cardedit pairs splits real multi-effect cards into rows",
+            multiRow > 0, cards + " cards / " + multiRow + " multi");
+        Check("cardedit pairs shows the shorthand text of real cards",
+            shorthandRows > 0, cards + " cards / " + shorthandRows + " shorthand rows");
+    }
+
+    private static string JoinPairParts(IList<CardEffectPair> pairs, bool texts)
+    {
+        var parts = new List<string>();
+        for (int i = 0; i < pairs.Count; i++)
+        {
+            // CardData.txt writes the text of a `*Shorthand` right below the
+            // shorthand and the card's own `Text` line after it, so the
+            // preview comes first inside the row.
+            if (texts && !string.IsNullOrEmpty(pairs[i].InheritedText))
+                parts.Add(pairs[i].InheritedText);
+            string value = texts ? pairs[i].Text : pairs[i].Code;
+            if (!string.IsNullOrEmpty(value))
+                parts.Add(value);
+        }
+        return string.Join("\n", parts.ToArray());
+    }
+
+    /// <summary>Same lines after trimming: the check is about order and
+    /// content, not about the line endings an editor box produces.</summary>
+    private static bool SameLines(string left, string right)
+    {
+        return string.Equals(FlattenLines(left), FlattenLines(right),
+            StringComparison.Ordinal);
+    }
+
+    private static string FlattenLines(string text)
+    {
+        string[] lines = CardDataWriter.SplitLines(text);
+        var parts = new List<string>();
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i].Trim();
+            if (line.Length > 0)
+                parts.Add(line);
+        }
+        return string.Join("\n", parts.ToArray());
+    }
+
+    /// <summary>
+    /// 一条效果 = 效果内容 + 它自己的效果代码. CardData.txt writes 内容 1 /
+    /// 代码 1 / 内容 2 / 代码 2, so the splitter must pair them that way and a
+    /// save must not collect every `Text` line at the end of the block.
+    /// </summary>
+    private static void TestCardEffectPairs()
+    {
+        const string twoAbilities =
+            "Auto: OnPlay\r\n" +
+            "{\r\n" +
+            "        Draw 1\r\n" +
+            "}\r\n" +
+            "Cont: GiveSelf\r\n" +
+            "{\r\n" +
+            "        GainPower 1000\r\n" +
+            "}\r\n";
+
+        List<string[]> segments = CardEffectSplitter.SplitCode(twoAbilities);
+        Check("cardedit splitter finds both abilities", segments.Count == 2,
+            segments.Count.ToString());
+
+        IList<CardEffectPair> pairs =
+            CardEffectSplitter.Pair("第一条\n第二条", twoAbilities);
+        Check("cardedit splitter pairs each 内容 with its own 代码",
+            pairs.Count == 2 && pairs[0].Text == "第一条" &&
+            pairs[0].Code.Contains("Draw 1") && pairs[1].Text == "第二条" &&
+            pairs[1].Code.Contains("GainPower 1000") && !pairs[1].Code.Contains("Draw 1"),
+            pairs.Count + " / " + (pairs.Count > 1 ? pairs[1].Code : "?"));
+
+        // A text that wraps on the card is one 效果, not the next one.
+        IList<CardEffectPair> wrapped = CardEffectSplitter.Pair("第一行\n第二行",
+            "Auto: OnPlay\r\n{\r\n}\r\n");
+        Check("cardedit splitter keeps a wrapped text in one 效果",
+            wrapped.Count == 1 && wrapped[0].Text == "第一行\n第二行",
+            wrapped.Count + " / " + (wrapped.Count > 0 ? wrapped[0].Text : "?"));
+
+        TestCardEffectPairSave();
+    }
+
+    /// <summary>
+    /// Editing one text of a multi-effect card keeps every `Text` line under
+    /// its own ability; only the edited line changes.
+    /// </summary>
+    private static void TestCardEffectPairSave()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-cardpairs-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            SeriesFolder folder = CreateTestFolder(root);
+            string path = Path.Combine(root, "CardData.txt");
+            File.WriteAllText(path,
+                "Character: TST/06-E001\r\n" +
+                "Name 两条效果\r\n" +
+                "Color R\r\n" +
+                "Level 1\r\n" +
+                "Cost 0\r\n" +
+                "Power 5000\r\n" +
+                "Trait1 テスト\r\n" +
+                "Auto: OnPlay\r\n" +
+                "{\r\n" +
+                "        Draw 1\r\n" +
+                "}\r\n" +
+                "Text 第一条\r\n" +
+                "Cont: GiveSelf\r\n" +
+                "{\r\n" +
+                "        GainPower 1000\r\n" +
+                "}\r\n" +
+                "Text 第二条\r\n" +
+                "EndCard\r\n",
+                new UTF8Encoding(false));
+
+            List<WeissCard> cards = ParseTestFolder(folder);
+            WeissCard card = cards.Count > 0 ? cards[0] : null;
+            Check("cardedit pairs keeps both text pieces",
+                card != null && card.TextLines.Count == 2 &&
+                card.TextLines[1] == "第二条",
+                card == null ? "null" : card.TextLines.Count.ToString());
+
+            CardEditorDraft draft = CardEditorDraft.FromCard(card, folder);
+            IList<CardEffectPair> draftPairs = CardEffectSplitter.PairDraft(draft);
+            Check("cardedit pairs reads the block as two 效果",
+                draftPairs.Count == 2 && draftPairs[1].Text == "第二条" &&
+                draftPairs[1].Code.Contains("GainPower 1000"),
+                draftPairs.Count + " / " +
+                (draftPairs.Count > 1 ? draftPairs[1].Text : "?"));
+
+            draft.Name = "改名卡";
+            Check("cardedit pairs save succeeds", CardDataWriter.Save(draft).Success);
+
+            string after = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit pairs keeps the name change",
+                after.Contains("Name 改名卡"), after);
+            Check("cardedit pairs keeps 内容 1 below 代码 1",
+                after.IndexOf("Text 第一条", StringComparison.Ordinal) >
+                after.IndexOf("Draw 1", StringComparison.Ordinal) &&
+                after.IndexOf("Text 第一条", StringComparison.Ordinal) <
+                after.IndexOf("Cont: GiveSelf", StringComparison.Ordinal), after);
+            Check("cardedit pairs keeps 内容 2 below 代码 2",
+                after.IndexOf("Text 第二条", StringComparison.Ordinal) >
+                after.IndexOf("GainPower 1000", StringComparison.Ordinal), after);
+            Check("cardedit pairs keeps two text lines",
+                CountOccurrences(after, "Text ") == 2, after);
+
+            // Editing the second text keeps it under the second ability.
+            draft = CardEditorDraft.FromCard(ParseTestFolder(folder)[0], folder);
+            draft.TextLines = new List<string> { "第一条", "第二条改" };
+            draft.Text = "第一条\n第二条改";
+            Check("cardedit pairs text save succeeds",
+                CardDataWriter.Save(draft).Success);
+
+            after = File.ReadAllText(path, Encoding.UTF8);
+            Check("cardedit pairs writes the edited text under its own 代码",
+                after.Contains("Text 第二条改") &&
+                after.IndexOf("Text 第一条", StringComparison.Ordinal) <
+                after.IndexOf("Cont: GiveSelf", StringComparison.Ordinal) &&
+                after.IndexOf("Text 第二条改", StringComparison.Ordinal) >
+                after.IndexOf("GainPower 1000", StringComparison.Ordinal), after);
+            Check("cardedit pairs keeps two text lines after the edit",
+                CountOccurrences(after, "Text ") == 2, after);
+
+            List<WeissCard> reloaded = ParseTestFolder(folder);
+            Check("cardedit pairs keeps both 效果 after the edit",
+                reloaded.Count == 1 && reloaded[0].TextLines.Count == 2 &&
+                reloaded[0].TextLines[1] == "第二条改",
+                reloaded.Count == 0 ? "none" : reloaded[0].TextLines.Count.ToString());
         }
         finally
         {
@@ -3790,6 +5912,31 @@ internal static class SmokeTests
                 eClone != null && eClone.Id == "TST/02-E001b" &&
                 eClone.CloneOf != null && eClone.CloneOf.Id == "TST/02-E001",
                 eClone == null ? "none" : eClone.Id);
+
+            // 保存 N 张: the offered letter skips what the folder shows and what
+            // the queue already handed out, and a refused row does not stop the
+            // rows after it.
+            string queued = AltArtworkWriter.SuggestAltId("TST/01-001",
+                "TST/01", "测试系列/S01", altRoot,
+                new HashSet<char> { 'a' });
+            Check("altart writer skips letters already handed out",
+                queued == "TST/01-001b", queued);
+
+            var batch = new List<AltArtworkRequest>();
+            batch.Add(CreateAltArtRequest("TST/01-001b", image, cardsRoot, altRoot));
+            batch.Add(CreateAltArtRequest("TST/01-001c", image, cardsRoot, altRoot));
+            AltArtBatchResult batchResult = AltArtworkWriter.SaveAll(batch);
+            Check("altart writer keeps the rest of a queue",
+                batchResult.Results.Count == 2 &&
+                batchResult.SavedCount == 1 && batchResult.FailedCount == 1 &&
+                batchResult.Results[0].Success &&
+                !batchResult.Results[1].Success &&
+                File.Exists(Path.Combine(altRoot, "01", "TST_01_001b.png")),
+                batchResult.Message);
+            Check("altart batch message names both halves",
+                batchResult.Message.Contains("已保存 1 张") &&
+                batchResult.Message.Contains("1 张失败"),
+                batchResult.Message);
         }
         finally
         {
@@ -3946,10 +6093,27 @@ internal static class SmokeTests
         return string.Join(" | ", parts.ToArray());
     }
 
+    /// <summary>One 添加异画 request of the batch tests.</summary>
+    private static AltArtworkRequest CreateAltArtRequest(string altId,
+        string image, string cardsRoot, string altRoot)
+    {
+        var request = new AltArtworkRequest();
+        request.BaseCardId = "TST/01-001";
+        request.Prefix = "TST/01";
+        request.FolderPath = "测试系列/S01";
+        request.FolderFullPath = cardsRoot;
+        request.FileName = "CardData";
+        request.AlternateArtworkRoot = altRoot;
+        request.AltId = altId;
+        request.ImageSourcePath = image;
+        return request;
+    }
+
     /// <summary>
     /// 添加异画 in the editor page: the right column grows the block for an
-    /// existing card, suggests the next free letter and refuses to save before
-    /// an image was picked.
+    /// existing card, one dropped image becomes one queued row with its own
+    /// letter, the queue survives a save that only wrote part of it, and the
+    /// block refuses to save before an image was picked.
     /// </summary>
     private static void TestAltArtPage()
     {
@@ -3979,11 +6143,13 @@ internal static class SmokeTests
             "ws-altart-page-" + Guid.NewGuid().ToString("N"));
         string altRoot = Path.Combine(root, "AlternateArtwork");
         string image = Path.Combine(root, "alt.png");
+        string second = Path.Combine(root, "alt2.png");
         try
         {
             Directory.CreateDirectory(Path.Combine(altRoot, "01"));
             Directory.CreateDirectory(Path.Combine(root, "S01"));
             File.WriteAllBytes(image, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+            File.WriteAllBytes(second, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
 
             var series = new SeriesDefinition("测试系列");
             SeriesFolder folder = CreatePackFolder("测试系列/S01", "TST/01",
@@ -4021,35 +6187,141 @@ internal static class SmokeTests
                 page.CreateControl();
                 LayOutDeep(page);
                 Control altImage = FindEditorControl(page, "_altImageBox");
-                Check("altart page lays out its block",
-                    altId != null && altId.Width >= 150 && altId.Height >= 26 &&
-                    altImage != null && altImage.Width >= 60 &&
-                    altImage.Height >= 80,
-                    (altId == null ? "null" : altId.Width + "x" + altId.Height) +
-                    " / " + (altImage == null
+                Control strip = FindEditorControl(page, "_altQueueStrip");
+                var column = section == null ? null : section.Parent as TableLayoutPanel;
+                Check("altart page keeps the block height",
+                    column != null && column.RowStyles[0].Height == 168F,
+                    column == null ? "null" : column.RowStyles[0].Height.ToString());
+                Check("altart page gives the preview the whole box",
+                    altImage != null && altImage.Width >= 86 &&
+                    altImage.Height >= 100 &&
+                    altId != null && altId.Width >= 150 && altId.Height >= 26,
+                    (altImage == null
                         ? "null"
-                        : altImage.Width + "x" + altImage.Height));
+                        : altImage.Width + "x" + altImage.Height) +
+                    " / " + (altId == null
+                        ? "null"
+                        : altId.Width + "x" + altId.Height));
+                Check("altart page lays out the queue strip",
+                    strip != null && strip.Width >= 300 && strip.Height >= 72,
+                    strip == null ? "null" : strip.Width + "x" + strip.Height);
+
+                // The strip derives its tiles from its own height, so the
+                // mirrored numbers prove the band grew from ~49x35 tiles to
+                // ~79x56 ones.
+                PropertyInfo tileWidthProperty = strip == null
+                    ? null
+                    : strip.GetType().GetProperty("TileWidth",
+                        BindingFlags.Instance | BindingFlags.NonPublic);
+                PropertyInfo tileHeightProperty = strip == null
+                    ? null
+                    : strip.GetType().GetProperty("TileHeight",
+                        BindingFlags.Instance | BindingFlags.NonPublic);
+                int tileWidth = tileWidthProperty == null
+                    ? 0
+                    : (int)tileWidthProperty.GetValue(strip, null);
+                int tileHeight = tileHeightProperty == null
+                    ? 0
+                    : (int)tileHeightProperty.GetValue(strip, null);
+                Check("altart page grows the queue thumbnails",
+                    tileWidth >= 56 && tileHeight >= 79,
+                    tileWidth + "x" + tileHeight);
+
+                var altHost = section as TableLayoutPanel;
+                Control altSave = FindEditorControl(page, "_altSaveButton");
+                Control altClear = FindEditorControl(page, "_altClearButton");
+                var altActions = altSave == null
+                    ? null
+                    : altSave.Parent as FlowLayoutPanel;
+                Check("altart page grows the preview below the caption",
+                    altHost != null && altImage != null &&
+                    altHost.RowCount == 2 &&
+                    altHost.GetRow(altImage) == 1 &&
+                    altHost.GetRowSpan(altImage) == 1 &&
+                    altImage.Width >= 100 && altImage.Height >= 128,
+                    altImage == null
+                        ? "null"
+                        : altImage.Width + "x" + altImage.Height);
+                Check("altart page stacks 保存 over 清空 right of the queue",
+                    altHost != null && altActions != null && altSave != null &&
+                    altClear != null && strip != null &&
+                    altActions.FlowDirection == FlowDirection.TopDown &&
+                    altActions.Controls.Count == 2 &&
+                    altActions.Controls[0] == altSave &&
+                    altActions.Controls[1] == altClear &&
+                    altSave.Text == "保存" && altClear.Text == "清空" &&
+                    altActions.Left >= strip.Right,
+                    altActions == null
+                        ? "null"
+                        : altActions.FlowDirection + " / " +
+                          altActions.Controls.Count + " controls at " +
+                          altActions.Left);
+                Check("altart page pins the stacked pair to the bottom right",
+                    altActions != null && altSave != null && altClear != null &&
+                    altActions.ClientSize.Width > 0 &&
+                    altActions.ClientSize.Height > 0 &&
+                    altClear.Right == altActions.ClientSize.Width &&
+                    altClear.Bottom == altActions.ClientSize.Height &&
+                    altSave.Bottom <= altClear.Top,
+                    altActions == null || altClear == null || altSave == null
+                        ? "null"
+                        : altSave.Left + "-" + altSave.Right + "," +
+                          altSave.Top + "-" + altSave.Bottom + " / " +
+                          altClear.Left + "-" + altClear.Right + "," +
+                          altClear.Top + "-" + altClear.Bottom + " of " +
+                          altActions.ClientSize.Width + "x" +
+                          altActions.ClientSize.Height);
 
                 Check("altart page wants the art first",
-                    page.ReadAltArt() == null && StatusText(page).Contains("异画卡图"),
+                    page.ReadAltArts() == null && StatusText(page).Contains("异画卡图"),
                     StatusText(page));
 
-                MethodInfo apply = typeof(CardEditorPage).GetMethod(
-                    "ApplyAltArtImage",
+                MethodInfo append = typeof(CardEditorPage).GetMethod(
+                    "AppendAltArtImages",
                     BindingFlags.Instance | BindingFlags.NonPublic);
-                if (apply != null)
-                    apply.Invoke(page, new object[] { image });
+                if (append != null)
+                    append.Invoke(page, new object[] { new string[] { image, second } });
 
-                AltArtworkRequest request = page.ReadAltArt();
-                Check("altart page builds the request",
-                    request != null && request.BaseCardId == "TST/01-001" &&
-                    request.AltId == "TST/01-001a" &&
-                    request.Prefix == "TST/01" &&
-                    request.FolderPath == "测试系列/S01" &&
-                    request.FolderFullPath == folder.FullPath &&
-                    request.FileName == "CardData" &&
-                    request.ImageSourcePath == image,
-                    request == null ? "null" : request.AltId);
+                IList<AltArtworkRequest> requests = page.ReadAltArts();
+                Check("altart page builds one request per image",
+                    requests != null && requests.Count == 2 &&
+                    requests[0].AltId == "TST/01-001a" &&
+                    requests[1].AltId == "TST/01-001b" &&
+                    requests[0].BaseCardId == "TST/01-001" &&
+                    requests[0].Prefix == "TST/01" &&
+                    requests[0].FolderPath == "测试系列/S01" &&
+                    requests[0].FolderFullPath == folder.FullPath &&
+                    requests[0].FileName == "CardData" &&
+                    requests[0].ImageSourcePath == image &&
+                    requests[1].ImageSourcePath == second,
+                    requests == null
+                        ? "null"
+                        : requests.Count + " / " + requests[0].AltId +
+                            " / " + requests[1].AltId);
+
+                // Only the first image made it to disk: it leaves the queue, the
+                // refused one stays for a retry.
+                page.NotifyAltArtsSaved(AltArtworkWriter.SaveAll(
+                    new List<AltArtworkRequest> { requests[0] }));
+                AltArtQueueStrip queue = strip as AltArtQueueStrip;
+                Check("altart page drops the saved image from the queue",
+                    queue != null && queue.Count == 1 &&
+                    queue.Items[0].SourcePath == second &&
+                    queue.SelectedIndex == 0 &&
+                    altId.Input.Text == "TST/01-001b",
+                    queue == null
+                        ? "null"
+                        : queue.Count + " / " + altId.Input.Text);
+
+                // The ✕ of a tile goes through RemoveAltArtItem.
+                MethodInfo remove = typeof(CardEditorPage).GetMethod(
+                    "RemoveAltArtItem",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                if (remove != null)
+                    remove.Invoke(page, new object[] { 0 });
+                Check("altart page can drop a queued image",
+                    queue != null && queue.Count == 0,
+                    queue == null ? "null" : queue.Count.ToString());
 
                 // 添加卡片 has no base card in CardData, so the block folds away.
                 page.LoadDraft(CardEditorDraft.CreateBlank(series, folder),
@@ -4057,10 +6329,96 @@ internal static class SmokeTests
                 Check("altart page folds the block for 添加卡片",
                     section != null && !section.Visible);
                 Check("altart page refuses a new card",
-                    page.ReadAltArt() == null, StatusText(page));
+                    page.ReadAltArts() == null, StatusText(page));
 
                 page.UnloadDraft();
+                Check("altart page clears the queue on unload",
+                    queue != null && queue.Count == 0);
             }
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+                Directory.Delete(root, true);
+        }
+    }
+
+    /// <summary>
+    /// Image drops: the 卡图 / 异画 boxes own their file drops, so the window
+    /// wide 卡表压缩包 import must not answer them, and a drop carries every
+    /// supported image (a folder contributes the png / jpg files inside it).
+    /// </summary>
+    private static void TestCardImageDrops()
+    {
+        Exception error = null;
+        var worker = new Thread(delegate()
+        {
+            try
+            {
+                TestCardImageDropsCore();
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+        });
+        worker.SetApartmentState(ApartmentState.STA);
+        worker.IsBackground = true;
+        worker.Start();
+        worker.Join();
+        if (error != null)
+            Fail("image drop boxes run without a screen", error.ToString());
+    }
+
+    private static void TestCardImageDropsCore()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-drop-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(root);
+            string png = Path.Combine(root, "a.png");
+            string jpg = Path.Combine(root, "b.JPG");
+            string txt = Path.Combine(root, "c.txt");
+            File.WriteAllBytes(png, new byte[] { 0x89, 0x50, 0x4E, 0x47 });
+            File.WriteAllBytes(jpg, new byte[] { 0xFF, 0xD8, 0xFF, 0xE0 });
+            File.WriteAllText(txt, "x");
+
+            using (var box = new CardImageDropBox())
+            {
+                Check("drop scope leaves image boxes alone",
+                    !CardPackDropScope.Accepts(box));
+            }
+
+            using (var panel = new Panel())
+            {
+                Check("drop scope covers the rest of the window",
+                    CardPackDropScope.Accepts(panel));
+            }
+            Check("drop scope accepts no control at all",
+                !CardPackDropScope.Accepts(null));
+
+            var mixed = new DataObject(DataFormats.FileDrop,
+                new string[] { txt, png, root });
+            List<string> paths = CardImageDropBox.GetImagePaths(mixed);
+            Check("image drop keeps every supported file",
+                paths.Count == 2 && paths.Contains(png) && paths.Contains(jpg),
+                string.Join(", ", paths.ToArray()));
+
+            var ordered = new DataObject(DataFormats.FileDrop,
+                new string[] { png, jpg });
+            List<string> only = CardImageDropBox.GetImagePaths(ordered);
+            Check("image drop keeps the order Explorer sent",
+                only.Count == 2 && only[0] == png && only[1] == jpg,
+                string.Join(", ", only.ToArray()));
+
+            var args = new CardImageDroppedEventArgs(only);
+            Check("image drop event keeps every path",
+                args.Paths.Count == 2 && args.Path == png);
+
+            var single = new CardImageDroppedEventArgs(png);
+            Check("image drop event still carries one path",
+                single.Paths.Count == 1 && single.Path == png);
         }
         finally
         {

@@ -132,9 +132,10 @@ namespace WeissDeckBuilder.Data
 
         /// <summary>
         /// Text of one card block, without a trailing line break. The field
-        /// order follows the game's own files (header, base fields, effect
-        /// code, Text, EndCard) so a card written by the editor looks like the
-        /// ones shipped with the game and other tools keep reading it.
+        /// order follows the game's own files (header, base fields, effects,
+        /// EndCard) so a card written by the editor looks like the ones
+        /// shipped with the game and other tools keep reading it. A card with
+        /// several 效果 keeps every `Text` line right below its own ability.
         /// </summary>
         public static string BuildBlock(CardEditorDraft draft)
         {
@@ -152,14 +153,69 @@ namespace WeissDeckBuilder.Data
                     lines.Add(fields[i].Line);
             }
 
-            AppendEffectCode(lines, draft.EffectCode);
-
-            string text = EncodeText(draft.Text);
-            if (text.Length > 0)
-                lines.Add("Text " + text);
+            AppendEffectSection(lines, draft);
 
             lines.Add("EndCard");
             return string.Join("\n", lines.ToArray());
+        }
+
+        /// <summary>
+        /// The 效果 area of a new block: every 效果内容 right below its own
+        /// 效果代码, the way CardData.txt writes it. When the text pieces and
+        /// the ability blocks cannot be matched one to one (a text that wraps
+        /// on the card), the whole text goes below the code instead of
+        /// inventing 效果 the card does not have.
+        /// </summary>
+        private static void AppendEffectSection(List<string> lines, CardEditorDraft draft)
+        {
+            List<string[]> segments = CardEffectSplitter.SplitCode(draft.EffectCode);
+            IList<CardEffectPair> pairs = CardEffectSplitter.PairDraftForWrite(draft);
+            if (segments.Count > 1 && pairs.Count == segments.Count)
+            {
+                AppendEffects(lines, segments, pairs);
+                return;
+            }
+
+            AppendEffectCode(lines, draft.EffectCode);
+            AppendTextLine(lines, JoinOwnText(draft));
+        }
+
+        /// <summary>
+        /// 效果内容 of a draft as one string, without the pieces a `*Shorthand`
+        /// copies in from CommonEffects.txt.
+        /// </summary>
+        private static string JoinOwnText(CardEditorDraft draft)
+        {
+            List<string> own = CardEffectSplitter.OwnTextLines(draft);
+            return string.Join("\n", own.ToArray());
+        }
+
+        /// <summary>
+        /// Writes the ability blocks back with the 效果内容 of each one between
+        /// them. Text that has no block of its own (a row whose code the player
+        /// emptied) follows the last block, so nothing is lost.
+        /// </summary>
+        private static void AppendEffects(List<string> lines,
+            IList<string[]> segments, IList<CardEffectPair> pairs)
+        {
+            for (int i = 0; i < segments.Count; i++)
+            {
+                string[] block = segments[i];
+                for (int j = 0; j < block.Length; j++)
+                    lines.Add(block[j]);
+                if (i < pairs.Count)
+                    AppendTextLine(lines, pairs[i].Text);
+            }
+
+            for (int i = segments.Count; i < pairs.Count; i++)
+                AppendTextLine(lines, pairs[i].Text);
+        }
+
+        private static void AppendTextLine(List<string> lines, string text)
+        {
+            string value = EncodeText(text);
+            if (value.Length > 0)
+                lines.Add("Text " + value);
         }
 
         /// <summary>One `Key value` line the card editor owns.</summary>
@@ -215,7 +271,11 @@ namespace WeissDeckBuilder.Data
                 Line = draft.Color == CardColor.Undefined
                     ? null
                     : "Color " + ColorKey(draft.Color),
-                InsertWhenMissing = draft.Color != CardColor.Undefined
+                // A `*Shorthand` may set the color itself (`*RedStockSoul`
+                // writes `Color R`); writing it again would leave the tag
+                // twice in the block.
+                InsertWhenMissing = draft.Color != CardColor.Undefined &&
+                    draft.Color != draft.InheritedColor
             });
 
             fields.Add(new FieldLine
@@ -252,7 +312,12 @@ namespace WeissDeckBuilder.Data
                 Line = draft.Trigger == TriggerIcon.None
                     ? null
                     : "Trigger " + draft.Trigger,
-                InsertWhenMissing = draft.Trigger != TriggerIcon.None
+                // A climax shorthand already carries its own `Trigger`
+                // (`*2SoulClimax` writes `Trigger DoubleSoul`), so the icon the
+                // editor shows must not become a second tag in the block. Only
+                // a trigger the player really picks is written.
+                InsertWhenMissing = draft.Trigger != TriggerIcon.None &&
+                    draft.Trigger != draft.InheritedTrigger
             });
             fields.Add(new FieldLine
             {
@@ -269,12 +334,33 @@ namespace WeissDeckBuilder.Data
         }
 
         /// <summary>
+        /// The field lines of a draft in <see cref="BuildFieldLines"/> order.
+        /// 编辑卡片 remembers them as the state the block was opened in, so a
+        /// `Clone xxx` block only receives the fields the player changed: every
+        /// other value is inherited from the base card and stays implicit.
+        /// </summary>
+        public static string[] BuildFieldSignature(CardEditorDraft draft)
+        {
+            if (draft == null)
+                return new string[0];
+
+            List<FieldLine> fields = BuildFieldLines(draft);
+            var lines = new string[fields.Count];
+            for (int i = 0; i < fields.Count; i++)
+                lines[i] = fields[i].Line ?? string.Empty;
+            return lines;
+        }
+
+        /// <summary>
         /// Rewrites one existing block: every line the editor does not own
         /// (ability headers, `{ }` code, `*Shorthand`, `Requirement`, `Tag`,
         /// comments) is copied back untouched, so editing a card that uses a
         /// shorthand keeps the shorthand instead of exploding it. Only the
         /// values that actually changed are rewritten, and a missing field is
         /// added only when it carries information the game does not default to.
+        /// An untouched 效果区 is copied back line by line, `Text` lines
+        /// included, so a multi-effect card keeps 内容 1 / 代码 1 / 内容 2 /
+        /// 代码 2 instead of collecting every text at the end.
         /// </summary>
         private static string[] PatchBlock(IList<string> block, CardEditorDraft draft)
         {
@@ -314,16 +400,23 @@ namespace WeissDeckBuilder.Data
                 {
                     present.Add(key);
                     if (key == "text")
+                    {
                         textValues.Add(CommonEffectLibrary.DecodeText(value));
+                        // 效果内容 keeps its place in the body, so a block the
+                        // player did not touch is copied back exactly as it was.
+                        body.Add(BodyLine.Raw(line));
+                    }
                     else
+                    {
                         body.Add(BodyLine.Field(key));
+                    }
                     continue;
                 }
 
                 if (trimmed.StartsWith("{", StringComparison.Ordinal))
                     depth++;
                 others.Add(line);
-                body.Add(BodyLine.Other());
+                body.Add(BodyLine.Raw(line));
             }
 
             // The 效果代码 box holds exactly the lines the parser did not turn
@@ -333,7 +426,37 @@ namespace WeissDeckBuilder.Data
             string[] oldCode = NormalizeCode(others);
             bool codeChanged = !SequenceEqual(newCode, oldCode);
 
-            bool codeEmitted = false;
+            // A `Clone xxx` block has no 效果 of its own: the editor shows the
+            // code the block inherits from its base card, and that inherited
+            // code must not be written into the block. A clone block that turns
+            // out empty simply keeps inheriting, like before the edit.
+            bool cloneOnlyBlock = IsCloneOnlyBlock(present, others);
+            if (codeChanged)
+            {
+                string[] originalCode = NormalizeCode(
+                    SplitLines(draft.OriginalEffectCode ?? string.Empty));
+                if (SequenceEqual(newCode, originalCode))
+                    codeChanged = false;
+                else if (cloneOnlyBlock && newCode.Length == 0)
+                    codeChanged = false;
+            }
+
+            // 效果内容 a `*Shorthand` copies in from CommonEffects.txt is shown
+            // in the editor but never written back: the shorthand adds it again
+            // on load, so a saved card would show the same 效果 twice.
+            List<string> ownText = CardEffectSplitter.OwnTextLines(draft);
+            string currentText = NormalizeText(ownText);
+            bool textChanged = present.Contains("text")
+                ? !string.Equals(currentText, NormalizeText(textValues),
+                    StringComparison.Ordinal)
+                : !string.Equals(currentText,
+                    NormalizeText(CardEffectSplitter.DropInherited(
+                        SplitLines(draft.OriginalText ?? string.Empty),
+                        draft.InheritedTextLines)),
+                    StringComparison.Ordinal);
+            bool changed = codeChanged || textChanged;
+
+            bool effectsEmitted = false;
             for (int i = 0; i < body.Count; i++)
             {
                 BodyLine item = body[i];
@@ -348,14 +471,33 @@ namespace WeissDeckBuilder.Data
                     continue;
                 }
 
-                if (codeEmitted)
+                if (!changed)
+                {
+                    // Nothing of the effect tree moved: every ability line and
+                    // every `Text` line goes back exactly where it was read.
+                    if (item.Line != null)
+                        output.Add(item.Line);
+                    continue;
+                }
+
+                if (effectsEmitted)
                     continue;
 
-                codeEmitted = true;
-                if (codeChanged)
-                    output.AddRange(newCode);
-                else
-                    output.AddRange(others);
+                effectsEmitted = true;
+                AppendEffects(output,
+                    CardEffectSplitter.SplitCode(
+                        codeChanged ? newCode : others.ToArray()),
+                    CardEffectSplitter.PairDraftForWrite(draft));
+            }
+
+            if (changed && !effectsEmitted)
+            {
+                // A block without any 效果 line of its own (only fields) still
+                // gets the code and the text the player typed.
+                AppendEffects(output,
+                    CardEffectSplitter.SplitCode(
+                        codeChanged ? newCode : others.ToArray()),
+                    CardEffectSplitter.PairDraftForWrite(draft));
             }
 
             for (int i = 0; i < fields.Count; i++)
@@ -366,22 +508,66 @@ namespace WeissDeckBuilder.Data
                 if (present.Contains(field.Key) || inserted.Contains(field.Key))
                     continue;
 
+                // A `Clone xxx` block inherits every field: only a value the
+                // player really changed becomes a line of its own.
+                if (cloneOnlyBlock && IsUnchangedField(draft, i, field.Line))
+                    continue;
+
                 output.Add(field.Line);
             }
 
-            string text = EncodeText(draft.Text);
-            string currentText = NormalizeText(SplitLines(draft.Text));
-            bool textChanged = present.Contains("text")
-                ? !string.Equals(currentText, NormalizeText(textValues),
-                    StringComparison.Ordinal)
-                : !string.Equals(currentText,
-                    NormalizeText(SplitLines(draft.OriginalText ?? string.Empty)),
-                    StringComparison.Ordinal);
-            if (text.Length > 0 && (present.Contains("text") || textChanged))
-                output.Add("Text " + text);
-
             output.Add("EndCard");
             return output.ToArray();
+        }
+
+        /// <summary>
+        /// True when a field still carries the line the block was opened with,
+        /// so a `Clone xxx` block does not spell out what it inherits.
+        /// </summary>
+        private static bool IsUnchangedField(CardEditorDraft draft, int index,
+            string line)
+        {
+            string[] original = draft.OriginalFieldValues;
+            return original != null && index >= 0 && index < original.Length &&
+                string.Equals(original[index] ?? string.Empty,
+                    line ?? string.Empty, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// True for a block that carries nothing but a `Clone xxx` / `Copy xxx`
+        /// line. Every field and every 效果 of such a card comes from its base
+        /// card, so 保存 must not expand the block into a copy of that card.
+        /// </summary>
+        private static bool IsCloneOnlyBlock(HashSet<string> present,
+            IList<string> others)
+        {
+            if (present.Count > 0)
+                return false;
+
+            bool cloneLine = false;
+            for (int i = 0; i < others.Count; i++)
+            {
+                string trimmed = (others[i] ?? string.Empty).Trim();
+                if (trimmed.Length == 0)
+                    continue;
+                if (!IsCloneDirective(trimmed))
+                    return false;
+                cloneLine = true;
+            }
+            return cloneLine;
+        }
+
+        /// <summary>`Clone AW/S18-E017` and `Copy: AW/S18-E017` both clone.</summary>
+        private static bool IsCloneDirective(string trimmed)
+        {
+            int colon = trimmed.IndexOf(':');
+            string head = colon < 0 ? trimmed : trimmed.Substring(0, colon);
+            int space = head.IndexOf(' ');
+            if (space >= 0)
+                head = head.Substring(0, space);
+
+            return string.Equals(head, "clone", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(head, "copy", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>A body line of an existing block: an owned field or verbatim text.</summary>
@@ -390,6 +576,9 @@ namespace WeissDeckBuilder.Data
             /// <summary>Field key for an owned field, null for a verbatim line.</summary>
             public string Key;
 
+            /// <summary>The line as it stands in the file, for verbatim lines.</summary>
+            public string Line;
+
             public static BodyLine Field(string key)
             {
                 var line = new BodyLine();
@@ -397,9 +586,11 @@ namespace WeissDeckBuilder.Data
                 return line;
             }
 
-            public static BodyLine Other()
+            public static BodyLine Raw(string line)
             {
-                return new BodyLine();
+                var value = new BodyLine();
+                value.Line = line ?? string.Empty;
+                return value;
             }
         }
 

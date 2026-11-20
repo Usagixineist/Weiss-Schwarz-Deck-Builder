@@ -15,6 +15,14 @@ namespace WeissDeckBuilder.Data
     {
         private static Encoding _gbk;
 
+        /// <summary>
+        /// Strict UTF-8 decoder used only to validate a buffer. Asking it for
+        /// the character count walks the bytes exactly like a real decode but
+        /// allocates no string, so the file is not decoded twice.
+        /// </summary>
+        private static readonly UTF8Encoding StrictUtf8 =
+            new UTF8Encoding(false, true);
+
         public static StreamReader Open(string path)
         {
             byte[] bytes = File.ReadAllBytes(path);
@@ -52,8 +60,8 @@ namespace WeissDeckBuilder.Data
         {
             try
             {
-                var strict = new UTF8Encoding(false, true);
-                strict.GetString(bytes);
+                // 只要字符数，不要字符串：校验不该顺带把整个文件解码一遍。
+                StrictUtf8.GetCharCount(bytes);
                 return true;
             }
             catch (DecoderFallbackException)
