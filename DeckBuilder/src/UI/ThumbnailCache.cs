@@ -12,6 +12,15 @@ namespace WeissDeckBuilder.UI
     /// <summary>
     /// LRU cache for resized card/cover thumbnails. Original images are never
     /// kept alive; only the small bitmaps used by the tile grid are cached.
+    ///
+    /// Callers get the shared <see cref="Image"/> instance itself, and some of
+    /// them keep it in a field (the card detail overlay, the T-list plugin's
+    /// card thumbnails). Such an image must therefore stay usable after it
+    /// leaves the cache: evicted / discarded entries are only dropped here and
+    /// left to the GC, never disposed. Disposing them turned live references
+    /// into dead GDI+ handles, and the next <c>Width</c> read (drawing, or
+    /// <c>ImageList.Images.Add</c>) threw ArgumentException "Parameter is not
+    /// valid".
     /// </summary>
     public sealed class ThumbnailCache : IDisposable
     {
@@ -61,11 +70,26 @@ namespace WeissDeckBuilder.UI
             int height,
             bool cropToFill)
         {
+            return GetOrLoad(path, width, height, cropToFill, false);
+        }
+
+        /// <summary>
+        /// Same as above, but a fill crop can start at the very top of the
+        /// source image instead of the vertical center. Card art crops read
+        /// better that way: the character's face sits in the top part.
+        /// </summary>
+        public Image GetOrLoad(
+            string path,
+            int width,
+            int height,
+            bool cropToFill,
+            bool cropFromTop)
+        {
             if (string.IsNullOrEmpty(path) || width <= 0 || height <= 0)
                 return null;
 
             string key = path + "|" + width + "x" + height +
-                (cropToFill ? "|cover" : "|fit");
+                (cropToFill ? (cropFromTop ? "|cover-top" : "|cover") : "|fit");
 
             lock (_sync)
             {
@@ -79,7 +103,8 @@ namespace WeissDeckBuilder.UI
             }
 
             long decodeStart = Stopwatch.GetTimestamp();
-            Image loaded = LoadAndResize(path, width, height, cropToFill);
+            Image loaded = LoadAndResize(path, width, height, cropToFill,
+                cropFromTop);
             _decodeCount++;
             _decodeTicks += Stopwatch.GetTimestamp() - decodeStart;
             if (loaded == null)
@@ -112,7 +137,11 @@ namespace WeissDeckBuilder.UI
 
                     _lru.RemoveLast();
                     _entries.Remove(last.Value.Key);
-                    last.Value.Image.Dispose();
+
+                    // 故意不 Dispose：GetOrLoad 返回的就是这个实例本身，调用方
+                    // 会把它留在字段里继续用。淘汰时 Dispose 会让那些引用变成
+                    // 已释放的 GDI+ 对象，下一次读 Width / 画图 / 塞进 ImageList
+                    // 就抛“参数无效”。没人引用以后 GC 会回收句柄。
                 }
             }
 
@@ -123,7 +152,8 @@ namespace WeissDeckBuilder.UI
             string path,
             int width,
             int height,
-            bool cropToFill)
+            bool cropToFill,
+            bool cropFromTop)
         {
             try
             {
@@ -154,10 +184,15 @@ namespace WeissDeckBuilder.UI
                             float sourceWidth = width / scale;
                             float sourceHeight = height / scale;
                             float sourceX = (source.Width - sourceWidth) / 2F;
-                            float sourceY = (source.Height - sourceHeight) / 2F;
+                            // Top crop keeps the character's face, which sits in
+                            // the upper part of the card art; center crop cuts it.
+                            float sourceY = cropFromTop
+                                ? 0F
+                                : (source.Height - sourceHeight) / 2F;
                             graphics.DrawImage(source,
                                 new Rectangle(0, 0, width, height),
-                                sourceX, sourceY, sourceWidth, sourceHeight,
+                                Math.Max(0F, sourceX), Math.Max(0F, sourceY),
+                                sourceWidth, sourceHeight,
                                 GraphicsUnit.Pixel);
                         }
                         else
@@ -204,8 +239,8 @@ namespace WeissDeckBuilder.UI
         {
             lock (_sync)
             {
-                foreach (CacheEntry entry in _lru)
-                    entry.Image.Dispose();
+                // 和淘汰时一样：位图可能还被调用方引用着（例如插件刚取到缩略图
+                // 就被关掉页面），这里只丢缓存表，释放交给 GC。
                 _lru.Clear();
                 _entries.Clear();
             }

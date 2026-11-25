@@ -5,7 +5,8 @@
 .DESCRIPTION
     把运行所需的文件收进 staging（build\package\DeckBuilder），再压缩成一个 zip。
     压缩包解开后是 DeckBuilder\ 文件夹，整个丢进游戏目录即可，解压即用。
-    绝不打包 data-root.txt、build\、tests\ 和日志文件。
+    extra\ 下的插件只带 plugin.txt 和 dll（-IncludeSource 才带源码）。
+    绝不打包 data-root.txt、settings.txt、build\、tests\、日志和插件自己存的数据。
 
 .PARAMETER Version
     版本号。默认读 version.txt。
@@ -111,6 +112,54 @@ if (-not $NoDocs) {
     }
 }
 
+# ---- 附加功能插件（extra\）----
+# 一个文件夹一个插件。运行只需要 plugin.txt 和清单里写的 dll，所以默认只带这两样：
+# TierList.txt 这类用户数据、*.log、*.bak-* 备份都不会进别人的压缩包，
+# 别人解压后看到的是干净的初始状态。-IncludeSource 才额外带上 .cs 和 build.ps1。
+$extraDir = Join-Path $root 'extra'
+$extraPlugins = @()
+if (Test-Path -LiteralPath $extraDir) {
+    foreach ($folder in (Get-ChildItem -LiteralPath $extraDir -Directory |
+        Sort-Object Name)) {
+        if ($folder.Name.StartsWith('_')) { continue }
+
+        $manifest = Join-Path $folder.FullName 'plugin.txt'
+        if (-not (Test-Path -LiteralPath $manifest)) { continue }
+
+        $files = @($manifest)
+        $files += @(Get-ChildItem -LiteralPath $folder.FullName -Filter '*.dll' -File |
+            ForEach-Object { $_.FullName })
+        if ($IncludeSource) {
+            $files += @(Get-ChildItem -LiteralPath $folder.FullName -File |
+                Where-Object {
+                    $_.Extension -eq '.cs' -or $_.Extension -eq '.md' -or
+                        $_.Name -eq 'build.ps1'
+                } |
+                ForEach-Object { $_.FullName })
+        }
+
+        $dlls = @($files | Where-Object { $_ -like '*.dll' })
+        if ($dlls.Count -eq 0) {
+            Write-Warning ("插件 " + $folder.Name + " 只有清单没有 dll，已跳过：" +
+                $folder.FullName)
+            continue
+        }
+
+        $pluginTarget = Join-Path $stage ('extra\' + $folder.Name)
+        New-Item -ItemType Directory -Force -Path $pluginTarget | Out-Null
+        foreach ($file in $files) {
+            Copy-Item -LiteralPath $file -Destination $pluginTarget -Force
+        }
+        $extraPlugins += $folder.Name
+    }
+}
+if ($extraPlugins.Count -gt 0) {
+    Write-Host ("插件 : " + ($extraPlugins -join ', '))
+}
+else {
+    Write-Warning "extra\ 下没有可打包的插件（需要 plugin.txt + dll 的文件夹）。"
+}
+
 if ($IncludeSource) {
     Write-Host "源码 : 一并打包"
     foreach ($relative in @('src', 'tests', 'lib', 'mod\src')) {
@@ -152,7 +201,8 @@ finally {
     $archive.Dispose()
 }
 
-$forbidden = @('data-root.txt', 'settings.txt', '.bak-', '/build/', 'test-results.txt', '.log')
+$forbidden = @('data-root.txt', 'settings.txt', 'TierList.txt',
+    'deck-sync-state.txt', '.bak-', '/build/', 'test-results.txt', '.log')
 if (-not $IncludeSource) {
     $forbidden += '/tests/'
 }
@@ -170,6 +220,18 @@ if ($bad.Count -gt 0) {
 }
 if (-not ($names -contains 'DeckBuilder/dist/WeissDeckBuilder.exe')) {
     throw "压缩包里缺少 DeckBuilder/dist/WeissDeckBuilder.exe"
+}
+$pluginEntries = @($names | Where-Object { $_ -like 'DeckBuilder/extra/*/plugin.txt' })
+if ($pluginEntries.Count -eq 0) {
+    Write-Warning "压缩包里没有 extra\ 插件：别人解压后看不到“T表 / 禁限表”。"
+}
+else {
+    foreach ($pluginFolder in $extraPlugins) {
+        $prefix = 'DeckBuilder/extra/' + $pluginFolder + '/'
+        if (-not @($names | Where-Object { $_ -like ($prefix + '*.dll') }).Count) {
+            throw ("插件 " + $pluginFolder + " 没有带 dll：" + $prefix)
+        }
+    }
 }
 
 $info = Get-Item -LiteralPath $OutputPath

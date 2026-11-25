@@ -18,6 +18,16 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
+        /// The WS brand label doubles as the only way back to 今日运势; Home
+        /// deliberately has no sidebar row of its own.
+        /// </summary>
+        private void NavHomeButton_Click(object sender, EventArgs e)
+        {
+            if (_viewMode != ViewMode.Home)
+                ShowHome();
+        }
+
+        /// <summary>
         /// Compact rail counterpart of the sidebar search block: the rail is
         /// too narrow for the input, so this entry returns to the first level
         /// (which expands the rail again) and hands the caret to the search
@@ -35,6 +45,16 @@ namespace WeissDeckBuilder.UI
         {
             if (_viewMode != ViewMode.Settings)
                 ShowSettings();
+        }
+
+        /// <summary>
+        /// 附加功能: the first click scans DeckBuilder\extra, later clicks reuse
+        /// the pages that are already alive (so a plugin keeps its state).
+        /// </summary>
+        private void NavExtrasButton_Click(object sender, EventArgs e)
+        {
+            if (_viewMode != ViewMode.Extras)
+                ShowExtras();
         }
 
         /// <summary>

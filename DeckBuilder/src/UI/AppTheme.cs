@@ -22,7 +22,12 @@ namespace WeissDeckBuilder.UI
     /// 里读，所以全程序几百处调用都不用改；换主题时换的是那张表。
     /// 强调色与状态色不随主题变化，仍然是固定值。
     /// </summary>
-    internal static class AppTheme
+    /// <summary>
+    /// 配色表。类本身是 public，因为附加功能插件要用
+    /// <see cref="AppTheme"/> 取色才能和主界面保持一致；
+    /// 具体的调色板（<c>AppPalette</c>）仍然只在程序集内部使用。
+    /// </summary>
+    public static class AppTheme
     {
         public static Color Navigation
         {
@@ -103,6 +108,12 @@ namespace WeissDeckBuilder.UI
 
         /// <summary>Colour of a deck that grew past the 50 张 target.</summary>
         public static readonly Color Danger = Color.FromArgb(248, 113, 113);
+
+        /// <summary>
+        /// 今日运势 大吉 / 中吉 的金色。它只用于这一张落地页，所以不占
+        /// AppPalette 的槽位；深浅主题里都有足够的对比度。
+        /// </summary>
+        public static readonly Color FortuneGold = Color.FromArgb(202, 138, 4);
 
         /// <summary>
         /// 在某个填充色上该用白字还是深字。判断依据是填充色本身的亮度，所以

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$GameRoot = (Split-Path -Parent $PSScriptRoot),
     [switch]$Run
 )
@@ -16,6 +16,9 @@ $thirdPartyNotices = Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md'
 $outExe = Join-Path $distDir 'WeissDeckBuilder.exe'
 $rsp = Join-Path $buildDir 'build.rsp'
 $log = Join-Path $buildDir 'build.log'
+# 程序图标：assets\make-icon.ps1 用官方鸢尾花徽标生成，既烧进 exe 的资源节
+# （资源管理器 / 任务栏 / 快捷方式都读它），也作为托管资源嵌进去供窗口标题栏取值。
+$appIcon = Join-Path $projectRoot 'assets\WeissDeckBuilder.ico'
 
 if (-not (Test-Path -LiteralPath $csc)) {
     throw "Roslyn csc not found: $csc"
@@ -82,6 +85,15 @@ $lines.Add('/utf8output')
 # 4.2；运行时统一走 GAC 里的同一份实现，这条绑定重定向提示没有实际意义。
 $lines.Add('/nowarn:1701')
 $lines.Add('/out:"' + $outExe + '"')
+if (Test-Path -LiteralPath $appIcon) {
+    $lines.Add('/win32icon:"' + $appIcon + '"')
+    # 同一个 ico 再嵌一份托管资源，AppIcon 读它来设置窗口图标，不必依赖 dist 里多一个文件。
+    $lines.Add('/resource:"' + $appIcon + '",WeissDeckBuilder.ico')
+}
+else {
+    Write-Host ('[警告] 没有程序图标，exe 会用系统默认图标：' + $appIcon) -ForegroundColor Yellow
+    Write-Host '       运行 assets\make-icon.ps1 重新生成。' -ForegroundColor Yellow
+}
 foreach ($reference in $references) {
     $lines.Add('/reference:"' + $reference + '"')
 }

@@ -143,7 +143,10 @@ namespace WeissDeckBuilder.Data
                 }
 
                 indexByKey[key] = groups.Count;
-                groups.Add(new DeckCardCount(key, 1));
+                // Keep the code the deck actually lists, not the synthesized
+                // key: a group that only holds an alternate art should show
+                // that art instead of falling back to the base card.
+                groups.Add(new DeckCardCount(code, 1));
             }
 
             return groups;

@@ -9,6 +9,7 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using WeissDeckBuilder.Data;
+using WeissDeckBuilder.Extras;
 using WeissDeckBuilder.Infrastructure;
 using WeissDeckBuilder.Models;
 using WeissDeckBuilder.Search;
@@ -66,6 +67,8 @@ internal static class SmokeTests
                 db => TestDeckImportOverlayEscape()),
             new TestGroup("sync", "卡组同步插件", false,
                 db => TestDeckSyncPlanner()),
+            new TestGroup("extras", "附加功能：plugin.txt 清单与 extra 扫描", false,
+                db => TestExtraManifests()),
             new TestGroup("cardcode", "卡号与文本助手", false,
                 db => TestCardCodeHelpers()),
             new TestGroup("export", "卡组导出：文件名、PNG 与 PDF", false,
@@ -78,6 +81,8 @@ internal static class SmokeTests
                 db => TestTriggerGlossary()),
             new TestGroup("theme", "外观：主题设置与配色表", false,
                 db => { TestSettingsFile(); TestAppSettings(); TestAppPalette(); TestThemeRecolor(); }),
+            new TestGroup("home", "今日运势：每日抽卡与宜忌", true,
+                db => { TestDailyFortune(); TestDailyCardPicker(db()); }),
             new TestGroup("cardedit", "编辑卡片：卡块生成、写回与编辑器", false,
                 db => { TestCardEditor(); TestCardEditorPage(); TestCardImageDrops();
                     TestCardEffectPairs(); TestCardEditorShorthandText();
@@ -87,8 +92,8 @@ internal static class SmokeTests
                     TestCardEditorCloneBlock(); }),
             new TestGroup("packindex", "添加卡片：卡号定位卡包", false,
                 db => TestCardPackIndex()),
-            new TestGroup("images", "图片来源：一个目录只扫一次", false,
-                db => TestImageIndex()),
+            new TestGroup("images", "图片来源与缩略图缓存", false,
+                db => { TestImageIndex(); TestThumbnailCacheKeepsImagesUsable(); }),
             new TestGroup("altart", "添加异画：命名规则、写入与识别", false,
                 db => { TestAltArtNaming(); TestAltArtWriter(); TestAltArtPage(); }),
             new TestGroup("launcher", "启动游戏：定位游戏目录与不热更参数", true,
@@ -1038,6 +1043,80 @@ internal static class SmokeTests
             DeckComposition.OrderByCode(null).Count == 0 &&
             DeckComposition.GroupByCode(null).Count == 0);
 
+        // 卡组预览: a deck file stores the clone id of an 异画 (`AW/S18-E002X`),
+        // so the resolver has to hand the clone back or the tile paints the
+        // base print although the deck asked for the alternate art.
+        var altImages = new DeckCoverLocator(database);
+        var altResolver = new DeckCardResolver(database, altImages);
+        var altDeck = new DeckDefinition("异画解析测试", string.Empty,
+            DeckSource.Local, new[] { "AW/S18-E002X", "AW/S18-E002" });
+
+        WeissCard altCard = altResolver.Resolve(altDeck, "AW/S18-E002X");
+        Check("deck preview resolves an alt art to its clone",
+            altCard != null && altCard.IsClone &&
+            string.Equals(altCard.Id, "AW/S18-E002X",
+                StringComparison.OrdinalIgnoreCase) &&
+            altCard.CloneOf != null &&
+            string.Equals(altCard.CloneOf.Id, "AW/S18-E002",
+                StringComparison.OrdinalIgnoreCase),
+            altCard == null ? "null" : altCard.Id);
+
+        string altImage = altResolver.GetImagePath(altDeck, "AW/S18-E002X");
+        Check("deck preview paints the alt art image",
+            !string.IsNullOrEmpty(altImage) &&
+            altImage.IndexOf("AlternateArtwork",
+                StringComparison.OrdinalIgnoreCase) >= 0,
+            altImage ?? "missing");
+
+        WeissCard baseCard = altResolver.Resolve(altDeck, "AW/S18-E002");
+        string baseImage = altResolver.GetImagePath(altDeck, "AW/S18-E002");
+        Check("deck preview still resolves the base card",
+            baseCard != null && !baseCard.IsClone &&
+            string.Equals(baseCard.Id, "AW/S18-E002",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(baseImage) &&
+            baseImage.IndexOf("AlternateArtwork",
+                StringComparison.OrdinalIgnoreCase) < 0,
+            baseCard == null ? "null" : baseCard.Id);
+
+        IList<DeckCardCount> onlyAlt =
+            DeckComposition.GroupByBaseCode(new[] { "AW/S18-E002X" });
+        Check("unified art keeps an alt-art only group on its own art",
+            onlyAlt.Count == 1 &&
+            string.Equals(onlyAlt[0].Code, "AW/S18-E002X",
+                StringComparison.OrdinalIgnoreCase) &&
+            onlyAlt[0].Count == 1,
+            onlyAlt.Count == 0 ? "none" : onlyAlt[0].Code);
+
+        // A rarity suffix often has its own extracted art (mti_s83_055s.png),
+        // which the loader turns into a clone; the deck preview should paint
+        // that art. A suffix without a file must still fall back to the base.
+        var rarityDeck = new DeckDefinition("稀有度", string.Empty,
+            DeckSource.Local, new[] { "MTI/S83-E055S", "AW/S18-E002S" });
+        WeissCard rarityCard = altResolver.Resolve(rarityDeck, "MTI/S83-E055S");
+        string rarityImage = altResolver.GetImagePath(rarityDeck,
+            "MTI/S83-E055S");
+        Check("deck preview finds the rarity art of a suffix",
+            rarityCard != null &&
+            string.Equals(rarityCard.Id, "MTI/S83-E055s",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(rarityImage) &&
+            rarityImage.IndexOf("AlternateArtwork",
+                StringComparison.OrdinalIgnoreCase) >= 0,
+            rarityCard == null ? "null" : rarityCard.Id);
+
+        WeissCard missingRarity = altResolver.Resolve(rarityDeck, "AW/S18-E002S");
+        string missingImage = altResolver.GetImagePath(rarityDeck,
+            "AW/S18-E002S");
+        Check("deck preview falls back when a suffix has no art",
+            missingRarity != null &&
+            string.Equals(missingRarity.Id, "AW/S18-E002",
+                StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrEmpty(missingImage) &&
+            missingImage.IndexOf("AlternateArtwork",
+                StringComparison.OrdinalIgnoreCase) < 0,
+            missingRarity == null ? "null" : missingRarity.Id);
+
         IList<string> distinct = DeckComposition.DistinctCards(codes);
         Check("detail arrows walk every card once",
             distinct.Count == 2 &&
@@ -1332,6 +1411,65 @@ internal static class SmokeTests
             empty.GetLevelTotal(0) == 0 &&
             empty.SoulTriggerCards == 0 && empty.DoubleSoulTriggerCards == 0 &&
             empty.GetTriggersInUse().Count == 0);
+
+        // 卡组信息 prints 魂标 / 触发 as a horizontal list: every band is one
+        // row of names above a row of counts, four triggers per band. Only the
+        // measured height can be checked headlessly, but it has to stay flat
+        // while the triggers still fit in one band and grow by a whole band
+        // (two rows) once a fifth one shows up. BuildTriggerStats keeps the
+        // type and level tables identical, so the difference is the 触发
+        // block alone.
+        int noTriggerCards = DeckStatsPanel.MeasureHeight(BuildTriggerStats(0));
+        int oneTrigger = DeckStatsPanel.MeasureHeight(BuildTriggerStats(1));
+        int fourTriggers = DeckStatsPanel.MeasureHeight(BuildTriggerStats(4));
+        int fiveTriggers = DeckStatsPanel.MeasureHeight(BuildTriggerStats(5));
+        int nineTriggers = DeckStatsPanel.MeasureHeight(BuildTriggerStats(9));
+        int bandHeight = fiveTriggers - oneTrigger;
+
+        Check("deck stats panel keeps the empty trigger placeholder band",
+            noTriggerCards == oneTrigger,
+            noTriggerCards + "/" + oneTrigger);
+
+        Check("deck stats panel keeps four triggers on one horizontal band",
+            fourTriggers == oneTrigger,
+            oneTrigger + "/" + fourTriggers);
+
+        Check("deck stats panel adds a band for the fifth trigger",
+            bandHeight > 0 &&
+            nineTriggers - oneTrigger == bandHeight * 2,
+            bandHeight + "/" + (nineTriggers - oneTrigger));
+    }
+
+    /// <summary>
+    /// Numbers of a deck that only uses the first
+    /// <paramref name="triggerCount"/> trigger icons (魂, 2魂, …), one card
+    /// each in the same colour, category and level, so the measured height of
+    /// the 卡组信息 panel changes with the 触发 block alone. Passing 0 builds a
+    /// deck whose single card carries no trigger icon at all, the shape of the
+    /// empty 魂 placeholder.
+    /// </summary>
+    private static DeckStatistics BuildTriggerStats(int triggerCount)
+    {
+        var cards = new Dictionary<string, WeissCard>(
+            StringComparer.OrdinalIgnoreCase);
+        var codes = new List<string>();
+        int count = triggerCount > 0 ? triggerCount : 1;
+        for (int i = 0; i < count; i++)
+        {
+            string code = "T/G-" + i.ToString("00");
+            TriggerIcon trigger = triggerCount > 0
+                ? (TriggerIcon)(i + 1)
+                : TriggerIcon.None;
+            AddStatCard(cards, code, CardCategory.Character, CardColor.Yellow, 0,
+                trigger);
+            codes.Add(code);
+        }
+
+        return DeckStatistics.Compute(codes, delegate(string code)
+        {
+            WeissCard card;
+            return cards.TryGetValue(code, out card) ? card : null;
+        });
     }
 
     private static void AddStatCard(Dictionary<string, WeissCard> cards,
@@ -3000,6 +3138,97 @@ internal static class SmokeTests
         }
     }
 
+    /// <summary>
+    /// 缓存交出去的位图不能被它自己 Dispose 掉：调用方（详情层、T 表插件）
+    /// 会把缩略图留在字段里继续画、继续塞进 ImageList，句柄一旦被释放，
+    /// 下一次读 Width 就抛 ArgumentException（参数无效）。所以淘汰和
+    /// Dispose 之后，之前拿到的图必须仍然能用。
+    /// </summary>
+    private static void TestThumbnailCacheKeepsImagesUsable()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-thumbcache-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var paths = new List<string>();
+            for (int i = 0; i < 4; i++)
+            {
+                string path = Path.Combine(root, "card" + i + ".png");
+                using (var bitmap = new Bitmap(40, 40))
+                {
+                    using (Graphics graphics = Graphics.FromImage(bitmap))
+                        graphics.Clear(Color.FromArgb(20 * i, 40, 60));
+                    bitmap.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                }
+                paths.Add(path);
+            }
+
+            var cache = new ThumbnailCache(2);
+            Image first = cache.GetOrLoad(paths[0], 24, 24, true, true);
+            Image second = cache.GetOrLoad(paths[1], 24, 24, true, true);
+            Check("thumbnail cache decodes both images",
+                first != null && second != null);
+
+            // 再读两张，前两张被挤出只有 2 个位置的缓存。
+            Image third = cache.GetOrLoad(paths[2], 24, 24, true, true);
+            Image fourth = cache.GetOrLoad(paths[3], 24, 24, true, true);
+            Check("thumbnail cache holds the new images",
+                third != null && fourth != null);
+            Check("thumbnail cache keeps evicted images usable",
+                ThumbnailUsable(first) && ThumbnailUsable(second));
+
+            cache.Dispose();
+            Check("thumbnail cache keeps images usable after dispose",
+                ThumbnailUsable(third) && ThumbnailUsable(fourth));
+
+            using (var list = new ImageList())
+            {
+                list.ImageSize = new Size(24, 24);
+                list.ColorDepth = ColorDepth.Depth32Bit;
+                bool added = true;
+                try
+                {
+                    list.Images.Add(third);
+                }
+                catch (ArgumentException)
+                {
+                    added = false;
+                }
+                Check("thumbnail cache images still fit an ImageList", added);
+            }
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>图还能读尺寸（没被 Dispose）：ImageList / DrawImage 的前提。</summary>
+    private static bool ThumbnailUsable(Image image)
+    {
+        if (image == null)
+            return false;
+
+        try
+        {
+            return image.Width > 0 && image.Height > 0;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
     private static void TestCardCodeHelpers()
     {
         var index = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
@@ -3043,6 +3272,172 @@ internal static class SmokeTests
             commented == null ? "no definition" : string.Join("|", commented.TextLines.ToArray()));
 
         File.Delete(path);
+    }
+
+    /// <summary>
+    /// 附加功能 reads DeckBuilder\extra: one folder per plugin with a
+    /// plugin.txt manifest. The manifest is user editable, so defaults,
+    /// warnings and the id / assembly name guards are checked here — a bad
+    /// value has to become a visible warning (or an unusable manifest), never
+    /// a silent load of code from outside the plugin folder.
+    /// </summary>
+    private static void TestExtraManifests()
+    {
+        string folder = Path.Combine(@"C:\extra", "helloworld");
+        ExtraManifest defaults = ExtraManifest.Parse(folder, new string[0]);
+        Check("extras manifest defaults to the folder name",
+            defaults.Id == "helloworld" && defaults.Name == "helloworld" &&
+            defaults.Assembly == "helloworld.dll",
+            defaults.Id + " / " + defaults.Assembly);
+        Check("extras manifest defaults to enabled and order 100",
+            defaults.Enabled && defaults.Order == ExtraManifest.DefaultOrder &&
+            defaults.IsValid && defaults.Warnings.Count == 0,
+            defaults.Order.ToString());
+        Check("extras manifest points at the dll inside the folder",
+            defaults.AssemblyPath == Path.Combine(folder, "helloworld.dll"),
+            defaults.AssemblyPath);
+
+        ExtraManifest full = ExtraManifest.Parse(folder, new[]
+        {
+            "# 说明行", "; 也是注释", "",
+            "id=helloworld",
+            "name=示例插件",
+            "description=测试用",
+            "version=1.2.3",
+            "author=someone",
+            "assembly=Hello.dll",
+            "entry=Hello.World.Plugin",
+            "enabled=yes",
+            "order=7",
+            "unknown=1",
+            "not a key"
+        });
+        Check("extras manifest reads every known key",
+            full.Name == "示例插件" && full.Description == "测试用" &&
+            full.Version == "1.2.3" && full.Author == "someone" &&
+            full.Assembly == "Hello.dll" &&
+            full.EntryType == "Hello.World.Plugin" &&
+            full.Enabled && full.Order == 7,
+            full.Assembly + " " + full.Order);
+        Check("extras manifest keeps the dll name from the manifest",
+            full.AssemblyPath == Path.Combine(folder, "Hello.dll"),
+            full.AssemblyPath);
+        Check("extras manifest reports unknown keys and bad lines",
+            full.Warnings.Count == 2, full.Warnings.Count.ToString());
+
+        ExtraManifest upper = ExtraManifest.Parse(folder, new[] { "id=HelloWorld" });
+        Check("extras manifest lowers an upper case id",
+            upper.Id == "helloworld" && upper.IsValid &&
+            upper.Warnings.Count == 1, upper.Id);
+
+        ExtraManifest bad = ExtraManifest.Parse(folder, new[] { "id=我的 插件" });
+        Check("extras manifest rejects an unusable id",
+            !bad.IsValid && !string.IsNullOrEmpty(bad.Error), bad.Error);
+
+        ExtraManifest escape = ExtraManifest.Parse(folder,
+            new[] { "id=helloworld", @"assembly=..\evil.dll" });
+        Check("extras manifest refuses code from outside the folder",
+            escape.Assembly == "helloworld.dll" && escape.Warnings.Count == 1 &&
+            escape.AssemblyPath == Path.Combine(folder, "helloworld.dll"),
+            escape.Assembly);
+        Check("extras manifest validates assembly names",
+            ExtraManifest.IsValidAssemblyName("Hello.dll") &&
+            !ExtraManifest.IsValidAssemblyName(@"..\evil.dll") &&
+            !ExtraManifest.IsValidAssemblyName(@"C:\evil.dll") &&
+            !ExtraManifest.IsValidAssemblyName(@"sub\Hello.dll") &&
+            !ExtraManifest.IsValidAssemblyName(string.Empty));
+
+        ExtraManifest disabled = ExtraManifest.Parse(folder, new[] { "enabled=false" });
+        Check("extras manifest can switch a plugin off", !disabled.Enabled);
+
+        ExtraManifest badOrder = ExtraManifest.Parse(folder, new[] { "order=abc" });
+        Check("extras manifest keeps the default order on bad input",
+            badOrder.Order == ExtraManifest.DefaultOrder &&
+            badOrder.Warnings.Count == 1, badOrder.Order.ToString());
+
+        Check("extras paths put the folder next to dist",
+            ExtraPaths.RootDirectory(@"C:\game\DeckBuilder\dist") ==
+            Path.Combine(@"C:\game\DeckBuilder", ExtraPaths.FolderName),
+            ExtraPaths.RootDirectory(@"C:\game\DeckBuilder\dist"));
+        Check("extras paths put the folder next to a plain exe",
+            ExtraPaths.RootDirectory(@"C:\tools\builder") ==
+            Path.Combine(@"C:\tools\builder", ExtraPaths.FolderName),
+            ExtraPaths.RootDirectory(@"C:\tools\builder"));
+        Check("extras paths fold away an empty base directory",
+            ExtraPaths.RootDirectory(string.Empty) == string.Empty);
+
+        TestExtraCatalog();
+    }
+
+    /// <summary>
+    /// The scan only reads folders: template folders (leading <c>_</c>),
+    /// folders without a manifest and disabled plugins are skipped, duplicate
+    /// ids are resolved by order, and the list is sorted order → name → id.
+    /// </summary>
+    private static void TestExtraCatalog()
+    {
+        string root = Path.Combine(Path.GetTempPath(),
+            "ws-extras-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Check("extras catalog is empty without a folder",
+                ExtraCatalog.Scan(Path.Combine(root, "missing")).Count == 0);
+
+            WriteExtraManifest(root, "beta", "name=Beta", "order=5");
+            WriteExtraManifest(root, "alpha", "name=Alpha", "order=20");
+            WriteExtraManifest(root, "gamma", "enabled=false");
+            WriteExtraManifest(root, "delta", "id=alpha", "name=Delta");
+            WriteExtraManifest(root, "_template", "name=Template");
+            Directory.CreateDirectory(Path.Combine(root, "no-manifest"));
+
+            IList<ExtraManifest> plugins = ExtraCatalog.Scan(root);
+            Check("extras catalog lists the enabled plugins only",
+                plugins.Count == 2, plugins.Count.ToString());
+
+            string order = string.Empty;
+            for (int i = 0; i < plugins.Count; i++)
+            {
+                if (i > 0)
+                    order += ",";
+                order += plugins[i].Id;
+            }
+            Check("extras catalog sorts by order", order == "beta,alpha", order);
+
+            ExtraManifest kept = plugins.Count == 2 ? plugins[1] : null;
+            Check("extras catalog warns about the duplicate id",
+                kept != null && kept.Warnings.Count == 1 &&
+                kept.Warnings[0].Contains("delta"),
+                kept == null
+                    ? "missing"
+                    : string.Join(" | ",
+                        new List<string>(kept.Warnings).ToArray()));
+            Check("extras catalog ignores the template folder",
+                !plugins.Any(p => p.Name == "Template"));
+            Check("extras catalog ignores the disabled plugin",
+                !plugins.Any(p => p.Id == "gamma"));
+        }
+        finally
+        {
+            try
+            {
+                if (Directory.Exists(root))
+                    Directory.Delete(root, true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    private static void WriteExtraManifest(string root, string folder,
+        params string[] lines)
+    {
+        string path = Path.Combine(root, folder);
+        Directory.CreateDirectory(path);
+        File.WriteAllLines(Path.Combine(path, ExtraManifest.FileName), lines);
     }
 
     /// <summary>
@@ -6523,6 +6918,102 @@ internal static class SmokeTests
             if (Directory.Exists(root))
                 Directory.Delete(root, true);
         }
+    }
+
+    /// <summary>
+    /// 今日运势 is generated from the local date only: no network, no settings
+    /// file. These checks pin the same-day behaviour, the score bands and the
+    /// two distinct 宜 / 忌 tags the page renders.
+    /// </summary>
+    private static void TestDailyFortune()
+    {
+        DateTime day = new DateTime(2026, 11, 24);
+        FortuneReport first = DailyFortune.ForDate(day);
+        FortuneReport again = DailyFortune.ForDate(day.AddHours(18));
+
+        Check("home fortune same day is stable",
+            first.Score == again.Score &&
+            string.Equals(first.Level, again.Level, StringComparison.Ordinal) &&
+            first.Good.SequenceEqual(again.Good) &&
+            first.Bad.SequenceEqual(again.Bad),
+            string.Format("{0}/{1} vs {2}/{3}", first.Score, first.Level,
+                again.Score, again.Level));
+
+        Check("home fortune score is 0-100",
+            first.Score >= 0 && first.Score <= 100,
+            first.Score.ToString());
+
+        Check("home fortune level follows score",
+            string.Equals(first.Level, DailyFortune.LevelForScore(first.Score),
+                StringComparison.Ordinal),
+            first.Score + " -> " + first.Level);
+
+        Check("home fortune has two distinct good tags",
+            first.Good.Count == 2 && first.Good.Distinct().Count() == 2,
+            string.Join("/", first.Good));
+
+        Check("home fortune has two distinct bad tags",
+            first.Bad.Count == 2 && first.Bad.Distinct().Count() == 2,
+            string.Join("/", first.Bad));
+
+        Check("home fortune good and bad do not overlap",
+            !first.Good.Intersect(first.Bad).Any(),
+            string.Join("/", first.Good) + " | " + string.Join("/", first.Bad));
+
+        Check("home fortune level bands",
+            DailyFortune.LevelForScore(100) == "大吉" &&
+            DailyFortune.LevelForScore(90) == "大吉" &&
+            DailyFortune.LevelForScore(89) == "中吉" &&
+            DailyFortune.LevelForScore(75) == "中吉" &&
+            DailyFortune.LevelForScore(74) == "小吉" &&
+            DailyFortune.LevelForScore(60) == "小吉" &&
+            DailyFortune.LevelForScore(59) == "吉" &&
+            DailyFortune.LevelForScore(45) == "吉" &&
+            DailyFortune.LevelForScore(44) == "末吉" &&
+            DailyFortune.LevelForScore(30) == "末吉" &&
+            DailyFortune.LevelForScore(29) == "凶" &&
+            DailyFortune.LevelForScore(15) == "凶" &&
+            DailyFortune.LevelForScore(14) == "大凶" &&
+            DailyFortune.LevelForScore(0) == "大凶");
+
+        bool changed = false;
+        for (int i = 1; i <= 14 && !changed; i++)
+        {
+            FortuneReport next = DailyFortune.ForDate(day.AddDays(i));
+            changed = next.Score != first.Score ||
+                !next.Good.SequenceEqual(first.Good);
+        }
+        Check("home fortune changes with the date", changed);
+    }
+
+    /// <summary>
+    /// The daily card must be stable within a day and come from a real series
+    /// with an existing image, otherwise the landing page would look broken.
+    /// It deliberately uses the same lazy database as the other data groups.
+    /// </summary>
+    private static void TestDailyCardPicker(CardDatabase database)
+    {
+        DateTime day = new DateTime(2026, 11, 24);
+        WeissCard first = DailyCardPicker.Pick(database, day);
+        Check("home daily card exists", first != null);
+        if (first == null)
+            return;
+
+        WeissCard again = DailyCardPicker.Pick(database, day);
+        Check("home daily card same day is stable",
+            again != null &&
+            string.Equals(first.Id, again.Id, StringComparison.Ordinal) &&
+            string.Equals(first.ImagePath, again.ImagePath,
+                StringComparison.OrdinalIgnoreCase),
+            again == null ? "null" : again.Id);
+
+        Check("home daily card has an id",
+            !string.IsNullOrEmpty(first.Id), first.Id ?? "null");
+
+        Check("home daily card image exists",
+            !string.IsNullOrEmpty(first.ImagePath) &&
+            File.Exists(first.ImagePath),
+            first.ImagePath ?? "null");
     }
 
     private static void Check(string name, bool condition, string detail = null)

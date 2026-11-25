@@ -63,11 +63,20 @@ $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\ThemeControls.cs')
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\ThumbnailCache.cs')
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\DeckImportTilesControl.cs')
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\DeckImportOverlay.cs')
+# 卡组信息 is owner drawn and cannot be painted headlessly, but its measured
+# height is what tells the 触发 table to grow by a band, so the panel is
+# compiled in and MeasureHeight is checked directly.
+$sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\DeckStatsPanel.cs')
 # 编辑卡片 builds its page headlessly as well, so the layout and the
 # draft round trip are covered without opening a window.
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\TileGridControl.cs')
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\CardEditorPage.cs')
 $sourceFiles += Get-Item -LiteralPath (Join-Path $src 'UI\CardEditorControls.cs')
+# 附加功能 only reads folders and plugin.txt before it touches an assembly,
+# so those three helpers are checked headless without the whole app.
+$sourceFiles += Get-Item -LiteralPath (Join-Path $src 'Extras\ExtraManifest.cs')
+$sourceFiles += Get-Item -LiteralPath (Join-Path $src 'Extras\ExtraCatalog.cs')
+$sourceFiles += Get-Item -LiteralPath (Join-Path $src 'Extras\ExtraPaths.cs')
 # The deck-sync plugin's pure helpers live with the plugin so the DeckBuilder
 # folder stays self-contained; they are compiled here so they stay tested.
 $sourceFiles += Get-Item -LiteralPath (Join-Path $projectRoot 'mod\src\DeckSyncPlanner.cs')

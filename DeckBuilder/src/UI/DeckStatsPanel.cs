@@ -48,14 +48,14 @@ namespace WeissDeckBuilder.UI
         /// <summary>Caption of the trigger table: 魂 plus every CX the deck uses.</summary>
         private const string TriggerCaption = "魂标 / 触发";
 
-        /// <summary>Trigger / count pairs drawn on one line of the table.</summary>
-        private const int TriggersPerRow = 2;
-
         /// <summary>
-        /// Column widths of the 触发 table: a name column and its count per
-        /// pair. Names get the wider share so `DoubleSoul` still fits.
+        /// Triggers laid out along the horizontal axis, one trigger per column:
+        /// the names sit on the first row of a band and their counts right
+        /// below, the same shape as the 等级 table. Four per band matches the
+        /// four columns of the other two tables; a deck with more triggers
+        /// stacks another band instead of squeezing the names.
         /// </summary>
-        private static readonly int[] TriggerColumnWeights = { 3, 2, 3, 2 };
+        private const int TriggerColumns = 4;
 
         private readonly Font _captionFont;
         private readonly Font _headerFont;
@@ -298,9 +298,11 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
-        /// 魂 plus every CX icon the deck actually uses, two 名称 · 张数 pairs
-        /// per line. Icons no card carries are skipped, and the block still
-        /// shows one empty 魂 row so it never disappears.
+        /// 魂 plus every CX icon the deck actually uses, one trigger per
+        /// column: the first row of a band carries the names, the second row
+        /// their counts, so the block reads left to right like the 等级 table.
+        /// Icons no card carries are skipped, and the block still shows one
+        /// empty 魂 column so it never disappears.
         /// </summary>
         private int DrawTriggerTable(Graphics graphics, int top)
         {
@@ -311,21 +313,21 @@ namespace WeissDeckBuilder.UI
             if (triggers.Count == 0)
                 triggers = new List<TriggerIcon> { TriggerIcon.Soul };
 
-            int[] weights = TriggerColumnWeights;
+            int columns = TriggerColumnCount(triggers.Count);
             int rows = TriggerRowCount(stats);
 
             int y = DrawCaption(graphics, TriggerCaption, top);
-            Rectangle box = DrawBox(graphics, y, rows, weights);
+            Rectangle box = DrawBox(graphics, y, rows, columns);
 
             for (int i = 0; i < triggers.Count; i++)
             {
                 TriggerIcon trigger = triggers[i];
-                int row = i / TriggersPerRow;
-                int column = (i % TriggersPerRow) * 2;
+                int row = (i / columns) * 2;
+                int column = i % columns;
 
-                DrawCell(graphics, Cell(box, weights, column, row),
+                DrawCell(graphics, Cell(box, column, row, columns),
                     TriggerName(trigger), _headerFont, AppTheme.TextMuted);
-                DrawCell(graphics, Cell(box, weights, column + 1, row),
+                DrawCell(graphics, Cell(box, column, row + 1, columns),
                     (stats == null ? 0 : stats.GetTriggerTotal(trigger))
                         .ToString(),
                     _valueFont, AppTheme.Text);
@@ -344,25 +346,11 @@ namespace WeissDeckBuilder.UI
 
         /// <summary>
         /// Rounded background of one table plus the grid lines that separate
-        /// its cells, drawn the same way as the card detail info area.
+        /// its cells, drawn the same way as the card detail info area. Every
+        /// column takes an equal share of the width.
         /// </summary>
         private Rectangle DrawBox(Graphics graphics, int top, int rows,
             int columns)
-        {
-            var weights = new int[columns];
-            for (int i = 0; i < weights.Length; i++)
-                weights[i] = 1;
-
-            return DrawBox(graphics, top, rows, weights);
-        }
-
-        /// <summary>
-        /// Same box with proportional columns: every weight takes its share of
-        /// the width and a divider sits on each boundary. The 触发 table uses
-        /// it so a wide name still fits beside its count.
-        /// </summary>
-        private Rectangle DrawBox(Graphics graphics, int top, int rows,
-            int[] weights)
         {
             int height = Math.Max(RowHeight, rows * RowHeight);
             var box = new Rectangle(0, top, Math.Max(1, Width), height);
@@ -373,11 +361,10 @@ namespace WeissDeckBuilder.UI
                 graphics.FillPath(_boxBrush, path);
             }
 
-            int total = WeightsTotal(weights);
-            int x = box.Left;
-            for (int column = 1; column < weights.Length; column++)
+            int columnWidth = box.Width / Math.Max(1, columns);
+            for (int column = 1; column < columns; column++)
             {
-                x += box.Width * Math.Max(1, weights[column - 1]) / total;
+                int x = box.Left + column * columnWidth;
                 graphics.DrawLine(_dividerPen,
                     x, box.Top + 6, x, box.Bottom - 6);
             }
@@ -390,15 +377,6 @@ namespace WeissDeckBuilder.UI
             }
 
             return box;
-        }
-
-        private static int WeightsTotal(int[] weights)
-        {
-            int total = 0;
-            for (int i = 0; i < weights.Length; i++)
-                total += Math.Max(1, weights[i]);
-
-            return Math.Max(1, total);
         }
 
         private static Rectangle Cell(Rectangle box, int column, int row,
@@ -414,31 +392,6 @@ namespace WeissDeckBuilder.UI
                 Math.Max(1, right - left), RowHeight);
         }
 
-        /// <summary>
-        /// Cell of a proportional table; the last column takes the rounding
-        /// remainder so the cells always fill the box exactly.
-        /// </summary>
-        private static Rectangle Cell(Rectangle box, int[] weights,
-            int column, int row)
-        {
-            if (weights == null || weights.Length == 0)
-                return Cell(box, column, row, 1);
-
-            int total = WeightsTotal(weights);
-            int left = box.Left;
-            for (int i = 0; i < column && i < weights.Length; i++)
-                left += box.Width * Math.Max(1, weights[i]) / total;
-
-            int width = column >= 0 && column < weights.Length
-                ? box.Width * Math.Max(1, weights[column]) / total
-                : 0;
-            if (column == weights.Length - 1)
-                width = box.Right - left;
-
-            return new Rectangle(left, box.Top + row * RowHeight,
-                Math.Max(1, width), RowHeight);
-        }
-
         private static void DrawCell(Graphics graphics, Rectangle bounds,
             string text, Font font, Color color)
         {
@@ -452,16 +405,42 @@ namespace WeissDeckBuilder.UI
         }
 
         /// <summary>
-        /// Lines the trigger table needs: two pairs per line, and one line when
-        /// the deck carries no trigger at all (the empty 魂 placeholder).
+        /// Lines the trigger table needs: every band draws a name row with its
+        /// count row below, and the empty 魂 placeholder still takes one band.
         /// </summary>
         private static int TriggerRowCount(DeckStatistics stats)
         {
             int count = stats == null ? 0 : stats.GetTriggersInUse().Count;
             if (count <= 0)
+                count = 1;
+
+            return TriggerBandCount(count) * 2;
+        }
+
+        /// <summary>
+        /// Bands needed for <paramref name="triggerCount"/> triggers, four per
+        /// band.
+        /// </summary>
+        private static int TriggerBandCount(int triggerCount)
+        {
+            if (triggerCount <= 0)
                 return 1;
 
-            return (count + TriggersPerRow - 1) / TriggersPerRow;
+            return (triggerCount + TriggerColumns - 1) / TriggerColumns;
+        }
+
+        /// <summary>
+        /// Columns of the 触发 table. The bands share the triggers evenly, so
+        /// five triggers become 3 + 2 columns instead of 4 + 1 and the last
+        /// band never ends up as a single name beside three blank cells.
+        /// </summary>
+        private static int TriggerColumnCount(int triggerCount)
+        {
+            if (triggerCount <= 0)
+                return 1;
+
+            int bands = TriggerBandCount(triggerCount);
+            return (triggerCount + bands - 1) / bands;
         }
 
         /// <summary>

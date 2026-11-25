@@ -154,7 +154,8 @@ else {
     Write-Host ('仓库里没有 ' + $repoSyncName + '，改用内置 robocopy 规则同步。') -ForegroundColor Yellow
     $flags = @('/E', '/XJ', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
     if ($DryRun) { $flags += '/L' }
-    $flags += @('/XD', 'build', 'dist', 'plugin', 'dumps', '/XF', 'test-results.txt', 'deck-sync-state.txt', 'settings.txt')
+    $flags += @('/XD', 'build', 'dist', 'plugin', 'dumps', 'extra',
+        '/XF', 'test-results.txt', 'deck-sync-state.txt', 'settings.txt', 'extras.log')
     foreach ($relative in @('DeckBuilder', 'BepInEx\plugins', 'BepInEx\config')) {
         $source = Join-Path $GameRoot $relative
         $target = Join-Path $RepoRoot $relative

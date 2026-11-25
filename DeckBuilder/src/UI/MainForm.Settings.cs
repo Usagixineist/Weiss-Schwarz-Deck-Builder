@@ -586,8 +586,10 @@ namespace WeissDeckBuilder.UI
 
             AppTheme.Apply(mode);
             AppTheme.Recolor(this);
+            ApplyHomeTheme();
             ApplyDarkChrome();
             RefreshNavPaint();
+            RaiseExtrasThemeChanged();
 
             ApplyThemeButtonState(_themeDarkButton);
             ApplyThemeButtonState(_themeLightButton);

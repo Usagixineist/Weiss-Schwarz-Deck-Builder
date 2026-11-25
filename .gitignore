@@ -6,6 +6,10 @@
 /DeckBuilder/mod/plugin/
 /DeckBuilder/mod/build/
 
+# ---------- 附加功能插件（本机安装，一个文件夹一个插件） ----------
+/DeckBuilder/extra/
+/DeckBuilder/extras.log
+
 # ---------- BepInEx 运行时数据 ----------
 /BepInEx/cache/
 /BepInEx/LogOutput.log

@@ -39,7 +39,8 @@ $flags = @('/E', '/XJ', '/NFL', '/NDL', '/NJH', '/NJS', '/NP')
 if ($DryRun) {
     $flags += '/L'
 }
-$flags += @('/XD', 'build', 'dist', 'plugin', 'dumps', '/XF', 'test-results.txt', 'deck-sync-state.txt')
+$flags += @('/XD', 'build', 'dist', 'plugin', 'dumps', 'extra',
+    '/XF', 'test-results.txt', 'deck-sync-state.txt', 'extras.log')
 
 function Sync-Tree([string]$source, [string]$target) {
     Write-Host ("同步 " + $source + "  ->  " + $target)

@@ -7,7 +7,7 @@
 `CardData.txt` 备份为 `.bak`）。主题、触发名称这类只属于本程序的设置写在
 `DeckBuilder\settings.txt`，与游戏目录无关。
 
-当前版本采用**两级导航**：先按系列封面浏览全部系列（当前数据为 203 个），进入系列后再用左侧筛选栏检索卡牌。
+当前版本启动后先进入「今日运势」首屏；随后采用**两级导航**：先按系列封面浏览全部系列（当前数据为 203 个），进入系列后再用左侧筛选栏检索卡牌。
 搜索结果支持图片预览、卡牌详情和日文名显示，作为后续卡组编辑功能的底座。另一个同级页面
 “我的收藏”复用同一套封面与卡表，用颜色和红色数量标签显示自己拥有的卡，并把数量保存在
 `StreamingAssets\MyCollocation`；第四个页面“编辑卡片”复用同一套封面与卡表来修改或添加卡片。
@@ -134,6 +134,20 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\build.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\build.ps1 -Run
 ```
 
+程序图标在 `DeckBuilder\assets\WeissDeckBuilder.ico`：`build.ps1` 用 `/win32icon` 把它烧进
+exe 的资源节（资源管理器、任务栏、快捷方式读的是这一份），再嵌一份托管资源给窗口标题栏用；
+文件缺失时构建只警告、不失败。图标是白色底 / 黑色鸢尾花的官方徽标（`assets\ws-emblem.png`）
+转成的深底银标，想换配色或换尺寸就重跑生成脚本：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\assets\make-icon.ps1
+# 白底黑标的原始配色：-Variant Light
+```
+
+脚本会重写 `assets\WeissDeckBuilder.ico`（16 / 20 / 24 / 32 / 40 / 48 / 64 / 96 / 128 / 256 十档）、
+1024×1024 母版 `assets\icon-1024.png`，以及深浅桌面对照图 `assets\icon-preview.png`；重跑完再
+`build.ps1` 一次，exe 的图标才会更新。
+
 ## 测试
 
 ```powershell
@@ -149,7 +163,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\run-tests.
 ```
 
 测试按分组组织，`-Group` 只跑点名的组：其余组不执行，也不需要游戏数据
-（`metadata`/`search`/`sort`/`related`/`deck` 之外的组不加载卡表），日志末尾
+（`metadata`/`search`/`sort`/`related`/`deck`/`home` 之外的组不加载卡表），日志末尾
 会写一行“未运行: ...”。源码没改动时脚本复用上次的 `SmokeTests.exe`
 （`-Rebuild` 强制重编），因此“改一处、跑一组”的循环通常 1 秒左右。
 
@@ -168,7 +182,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\run-tests.
 | `cardpack` | ZIP / RAR / 7z 卡表压缩包安装（含固实包） | 否 |
 | `collection` | 我的收藏：卡包数量文件的读写、排序与统计 | 否 |
 | `glossary` | 触发名称术语表：默认名、读写与三个解析入口 | 否 |
+| `extras` | 附加功能：plugin.txt 清单与 extra 目录扫描 | 否 |
 | `theme` | 外观：界面设置文件与配色映射 | 否 |
+| `home` | 今日运势：同一天固定的吉凶、宜忌与每日卡片 | 是 |
 | `cardedit` | 编辑卡片：卡块生成、写回与编辑器 | 否 |
 | `packindex` | 添加卡片：卡号 → 卡包定位（前缀、同前缀多卡包排序） | 否 |
 | `images` | 图片来源：一个目录只扫一次、卡号归一化后仍能找到图 | 否 |
@@ -185,10 +201,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\profile-lo
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\profile-compare.ps1 -Runs 3
 ```
 
-当前结果：**670 项通过，0 项失败**（`-Group import` 20 项、`-Group export` 22 项，
+当前结果：**793 项通过，0 项失败**（`-Group import` 20 项、`-Group export` 22 项，
 `-Group cardpack` 为 45 项，`-Group collection` 为 17 项，`-Group glossary` 为 23 项，
-`-Group theme` 为 29 项，`-Group cardedit` 为 169 项，`-Group packindex` 为 15 项，
-`-Group launcher` 为 10 项）。
+`-Group theme` 为 29 项，`-Group home` 为 13 项，`-Group cardedit` 为 169 项，
+`-Group packindex` 为 15 项，`-Group extras` 为 21 项，`-Group launcher` 为 10 项）。
 测试报告写入 `DeckBuilder\tests\test-results.txt`。
 
 新增功能时在 `BuildGroups()` 里加一组（或挂到已有组），只写这块的断言，改完跑
@@ -197,6 +213,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\profile-co
 覆盖点包括：
 
 - 系列列表 GBK 字节排序，以及 `SeriesDefinition.FolderName`、系列缩略编号与元数据读取
+- 今日运势：同一日期重复生成的吉凶 / 今日人品 / 宜忌完全一致，等级分档边界（100 → 大吉、
+  0 → 大凶）、宜忌各两条且互不重复，换一天会得到不同结果；每日卡片同一天稳定、有卡号且卡图文件存在
 - 系列封面定位：跨 `Folders` 回退、跳过无图片文件夹、无封面时返回 `null`
 - `CardData.txt` 字段、`CommonEffects.txt` 简写、`Clone`/`Copy`
 - 编辑卡片的卡块生成、原位替换与追加、只重写被编辑行的回写（`*简写`、`Requirement` 原样保留）、
@@ -276,8 +294,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\DeckBuilder\profile-co
 界面布局不写进自动测试，改动后按两步自查即可：
 
 1. `build.ps1 -Run` 重新构建并启动程序；
-2. 手动点到对应页面看一眼（系列封面 → 卡牌列表 → 我的收藏与标记 → 编辑卡片与编辑器 →
-   卡组编辑 → 导入卡组弹层 → 查看卡组 → 卡组详情与四个导出按钮 → 设置 → 外观的深色/浅色）。
+2. 手动点到对应页面看一眼（今日运势 → 系列封面 → 卡牌列表 → 我的收藏与标记 → 编辑卡片与编辑器 →
+   卡组编辑 → 导入卡组弹层 → 查看卡组 → 卡组详情与四个导出按钮 → 设置 → 外观的深色/浅色 → 附加功能）。
+   首屏额外确认三件事：启动直接落在今日运势、点左上角 `Weiss Schwarz` / 窄栏 `WS` 能回到同一张当日卡片、
+   切到浅色主题后吉凶与宜忌仍然清楚。
 
 截图只在“界面外观确实变了”时才重拍，而且只拍改动的那一级；逻辑、按键、数据、
 同步这类改动看 `run-tests.ps1` 的分组结果就够了——“按键会不会被某个子控件吞掉”
@@ -289,9 +309,19 @@ README 展示，不是测试产物。
 
 ## 界面结构
 
+### 首屏：今日运势
+
+- 程序启动后直接落在「今日运势」，没有额外的侧栏入口；点左上角的 `Weiss Schwarz` 品牌（窄栏收起来后显示 `WS`）随时可以回到这里。
+- 左栏随机展示一张「今日卡片」：按本地日期选系列、再选卡，异画（同名克隆）与普通卡一起参与抽取，异画在卡图左上角显示蓝色「异画」角标。单击卡图或卡名会打开与卡表相同的详情弹层。
+- 同一天内的卡片固定不变，跨天自动刷新；窗口一直开着也会每分钟检查一次日期，最多约一分钟完成换日，不需要重启。
+- 右栏显示日期、吉凶（大吉 / 中吉 / 小吉 / 吉 / 末吉 / 凶 / 大凶）、今日人品 `0–100` 进度条，以及两条「宜」和两条「忌」。
+- 吉凶、今日人品和宜忌只由日期决定，不联网、不写入任何设置文件；同一台电脑的同一天重复打开也是同一份结果。
+- 第一次抽卡把一个系列的卡片解析推迟到首帧之后，启动时不会为了首屏扫描全部系列；读卡失败时卡片区会显示占位说明，吉凶面板仍然可用。
+
+
 ### 第一级：系列封面
 
-- 左侧导航宽 180px，自上而下为 `Weiss\nSchwarz` 标识、系列搜索栏（标题“系列搜索”、圆角输入框、“排序”单选与结果计数）、“系列卡表”入口、“卡组编辑”入口（展开时其下多两行“编辑卡组”“查看卡组”）、最下方的“我的收藏”入口（展开时其下多一行“只显示拥有”）与“编辑卡片”入口（展开时其下多两行“修改卡片”“添加卡片”），最底部固定两行“启动游戏”与“设置”；未进入对应页面时，搜索栏、收藏选项、卡组子项与写卡子项自动隐藏。
+- 左侧导航宽 180px，自上而下为 `Weiss\nSchwarz` 标识、系列搜索栏（标题“系列搜索”、圆角输入框、“排序”单选与结果计数）、“系列卡表”入口、“卡组编辑”入口（展开时其下多两行“编辑卡组”“查看卡组”）、最下方的“我的收藏”入口（展开时其下多一行“只显示拥有”）与“编辑卡片”入口（展开时其下多两行“修改卡片”“添加卡片”）、“附加功能”入口，最底部固定两行“启动游戏”与“设置”；未进入对应页面时，搜索栏、收藏选项、卡组子项与写卡子项自动隐藏。
 - 子项收起时由入口本身显示选中框：进入系列后的卡表页与卡片编辑器里“编辑卡片”整栏高亮，“编辑卡组”的卡表页同理；展开子项时入口只变白、选中框落在具体的子项上，任何时候都只有一处显示选中框。
 - 系列搜索支持系列名、系列缩写和卡号头（如 `w129`、`s130`），输入时即时过滤；排序可按系列名或缩写。
 - 主区域按系列名排序显示全部系列的封面方块（当前数据为 203 个）；标题为系列名，副标题列出该系列内所有不同的系列缩写，用 `/` 分开（如 `AW/GAW`）。
@@ -363,9 +393,9 @@ README 展示，不是测试产物。
 - 底部“删除”沿用导入弹层的两次点击手势：第一次点击只有按钮变红、文字变成“确认删除”，提示行改为“再次点击「删除」确认 · 其他操作会取消”；第二次点击才删掉 `Decks` 里的卡组文件，并同步删掉注册表 PlayerPrefs 里的 `Deck_<名字>`、`Date_<名字>`、`Sleeve_<名字>` 与 `DeckNames` 条目（没有对应注册表卡组时只删文件），删完自动回到卡组列表并刷新两块的卡片与数量，状态行显示“已删除 X”或“已删除 X（游戏卡组已同步移除）”。注册表被占用时状态行会附上原因，文件仍然保持已删除。预设卡组是游戏文件，删除按钮对它们直接置灰，提示行为“预设卡组 · 只读，不能删除”。
 - 切页、返回、按 Esc、切换视图、点开卡牌都会取消红色待删状态（红色状态下按 Esc 只取消、不返回），所以删除一定需要连着两次点击；返回列表后原卡组方块保持选中高亮。
 - 点击“← 卡组列表”或按 Esc 返回卡组列表。
-- “卡组信息”由三张自绘表格组成：①类型 / 颜色矩阵，表头为合计 / 角色 / 事件 / 高潮，每个用到的颜色（黄 / 绿 / 红 / 蓝）各占一行并用该颜色显示数字，某色为 0 时整行不显示，紫卡只计入合计；②等级直方图，列为 0 / 1 / 2 / 3，高潮卡没有等级因此不计入；③魂标 / 触发，把这张卡组用到的触发图标每行两组、按枚举顺序横向排开（每组是名称加张数，名称取“设置 → 术语”里的中文名，没改名时显示英文枚举名，魂 / 2魂 默认就是中文），一张触发都没有时只留一行 `魂 0` 占位，高度随触发种类自动变化。卡号在卡表里查不到的卡不计入任何表格。
+- “卡组信息”由三张自绘表格组成：①类型 / 颜色矩阵，表头为合计 / 角色 / 事件 / 高潮，每个用到的颜色（黄 / 绿 / 红 / 蓝）各占一行并用该颜色显示数字，某色为 0 时整行不显示，紫卡只计入合计；②等级直方图，列为 0 / 1 / 2 / 3，高潮卡没有等级因此不计入；③魂标 / 触发，改成与等级表同一种读法的横向列表：每个触发占一列、按枚举顺序从左到右排开，每组的第一行是名称、第二行是张数（名称取“设置 → 术语”里的中文名，没改名时显示英文枚举名，魂 / 2魂 默认就是中文）；一行最多放 4 个触发（与另两张表的 4 列对齐），第 5 个起自动折成下一组“名称行 + 张数行”，两组的列数平均分配（如 5 个触发为 3 + 2），一张触发都没有时只留一列 `魂 0` 占位，高度随触发种类自动变化。卡号在卡表里查不到的卡不计入任何表格。
 - 视图切换为平铺单选：“展开”按卡牌编号排序、每张复刻各占一格（10 列、间距 2px，50 张卡正好铺成 10×5）；“缩略”按编号去重（7 列，卡片大小按约 7×4 铺满页面计算、间距 15px），右下角显示 `×N`。
-- “异画”复选框紧跟在“缩略”后面，只在缩略视图出现（选择“展开”时隐藏）：默认按基础编号合并同一张卡的不同异画（如 `MTI/S83-E055S` 与 `MTI/S83-E055`）并只显示普通异画，勾选后改为每种异画各占一格。
+- “异画”复选框紧跟在“缩略”后面，只在缩略视图出现（选择“展开”时隐藏）：默认按基础编号合并同一张卡的不同异画（如 `MTI/S83-E055S` 与 `MTI/S83-E055`），合组后显示卡组里实际存在的那一种画——同时有基卡时显示普通异画，只有异画时显示那张异画；勾选后改为每种异画各占一格。
 - 单击网格中的卡片打开卡牌详情弹层，←/→ 在同一卡组内按编号顺序切换；同一张卡的复刻与异画只算一次，因此箭头总能换到另一张卡。
 - 点击“← 卡组列表”或按 Esc 返回卡组列表。
 
@@ -415,6 +445,16 @@ README 展示，不是测试产物。
 - 术语只改界面显示：卡表的 `Trigger` 行、导出的卡组与写卡始终是英文枚举名，所以游戏读取的数据不受影响。
 - “存储”分类里是“卡表压缩包”一行说明加一个圆角 `选择压缩包…` 按钮（压缩包也可以直接拖到窗口安装）；“软件信息”分类的版本 / 数据来源 / 许可与致谢仍然只是占位说明。
 
+### 附加功能（插件）
+
+- 一级导航的“附加功能”把主栏收成 72px 图标窄栏，二级栏换成插件列表（页头“插件列表” + 数量、分隔线、可滚动的插件行、底部“重新扫描 / 打开目录”两个链接），右侧是当前插件的页面。第一次点进来才扫描磁盘，没有插件的用户不用为这个页面付启动时间；一个插件都没有时显示“还没有安装插件”，给出 `DeckBuilder\extra` 的完整路径和 `打开 extra 文件夹` / `重新扫描` 两个按钮。
+- 插件目录固定在 `DeckBuilder\extra`（与 `dist`、`settings.txt` 同级，重建 `dist` 不丢），一个文件夹一个插件，文件夹里必须有 `plugin.txt` 和对应的 dll。以 `_` 开头的文件夹（模板、备份）和没有 `plugin.txt` 的文件夹直接跳过，`enabled=false` 的插件也不加载；`id` 重复时保留排在前面的那个，后面的在 `extras.log` 里记一行警告。列表顺序是 `order` → 名字 → `id`。
+- `plugin.txt` 和 `settings.txt` 用同一套写法（`键=值`，`#` 开头是注释，读不懂的行记进 `extras.log` 后跳过）：`id`（默认文件夹名，转小写）、`name`（默认文件夹名）、`description`、`version`、`author`、`assembly`（默认 `<id>.dll`，只认文件名，写路径会被拒绝，插件不能从目录外加载代码）、`entry`（入口类型全名，不写就在程序集里找第一个可实例化的 `IExtraPlugin`）、`enabled`、`order`（默认 100）。
+- 插件引用 `dist\WeissDeckBuilder.exe` 编译成 dll（与主程序同一个 .NET Framework 4.7.2），实现 `WeissDeckBuilder.Extras.IExtraPlugin` 的 `CreateContent(IExtraHost host)`，返回要显示的控件；这个方法在用户第一次点开这个插件时才调用，之后控件一直复用——切到别的插件再切回来不会重建，插件里的输入和缓存都还在。返回的控件如果还实现可选的 `IExtraPage`，切进来 / 切走时会收到 `OnActivated` / `OnDeactivated`。
+- `IExtraHost` 是插件能拿到的全部东西：`Info`（自己的清单）、`Owner`（主窗口）、`DataRoot`（`StreamingAssets`）、`Database`（只读卡表）、`Glossary`（触发名称表）、`Theme`（当前配色）、`LogPath`、`LoadDecks()`（重新读一遍卡组）、`ReloadDeckLibrary()`（让已经打开的卡组页刷新）、`ShowCard()`（按卡号打开主程序的卡片详情层）、`Log` / `ShowMessage` / `ShowError`，以及换主题时触发的 `ThemeChanged`。`AppTheme` 也是公开类型，插件自绘的颜色在 `ThemeChanged` 里重新取一次再 `Invalidate` 即可跟着深色 / 浅色走。
+- 插件的异常一律由主程序接住：`plugin.txt` 有错、程序集加载失败、找不到入口类型、`CreateContent` 抛异常或返回 `null`，这一行都会带“（加载失败）”留在列表里，点开是一页错误说明（原因 + 文件夹 + `打开插件目录` / `打开日志` / `重新扫描` 三个按钮），详细原因同时写进 `DeckBuilder\extras.log`（与 `dist` 同级，带时间戳，只在失败或警告时才生成）。一个插件坏掉不影响其他插件，也不影响主程序。
+- 装插件：把文件夹整个复制进 `extra`，点底部的 `重新扫描` 就能看到，不用重启；卸载就是删掉那个文件夹。程序运行时 dll 已被 `LoadFrom` 占用，替换 / 升级 dll 必须关掉程序再换——`重新扫描` 只负责发现新文件夹，已经在列表里的插件不会重新加载。
+
 ### 图片加载
 
 - `ThumbnailCache` 使用 LRU（上限 120 张），只缓存缩放后的位图，避免大图常驻内存；详情弹层另用上限 32 张的独立缓存。
@@ -440,8 +480,11 @@ README 展示，不是测试产物。
   这两个旧包的目录用的是文件夹名而不是套号，套号目录不存在时会回退到文件夹名目录。
 - 卡组文件与 `CardData.txt` 的编号写法并不统一（`NGL/S58-E001` 对应
   `NGL/S58-001`、`KS/W49-T16` 的图名为 `KS_W49_TE16`、复刻编号带
-  `S`/`SEC` 等后缀），`CardCodeMatcher` 会先归一化再匹配，卡组详情的卡图与
-  详情弹层因此都能取到正确的卡。
+  `S`/`SEC` 等后缀）。卡组详情先用保留末尾字母的卡号做精确匹配（所以
+  `AW/S18-E002X`、`BDY/W135-046a` 这类异画号会取到异画克隆与
+  `AlternateArtwork` 里的图，`MTI/S83-E055S` 也会取到 `mti_s83_055s.png`
+  对应的稀有度图），没有再交给 `CardCodeMatcher` 归一化回退，卡组详情的
+  卡图与详情弹层因此都能取到正确的卡。
 - `TextFileReader` 先按 BOM 判断编码，没有 BOM 时校验是否为合法 UTF-8，
   不合法则回退到 GBK（代码页 936），避免旧系列的中文名变成乱码。校验只走
   `GetCharCount`（只看是否解码得动，不生成字符串），所以每个卡表只解码一次。
@@ -524,11 +567,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File DeckBuilder\package.ps1
 ```
 
 - 版本号取自 `DeckBuilder\version.txt`（也可以用 `-Version 1.2.3` 覆盖）；
-- 产物：`DeckBuilder\dist\WeissDeckBuilder-<版本>.zip`（约 5.6 MB）；
+- 产物：`DeckBuilder\dist\WeissDeckBuilder-<版本>.zip`（约 5.7 MB）；
 - 压缩包里只有一个 `DeckBuilder\` 文件夹：`README.md`、`THIRD_PARTY_NOTICES.md`、`install.ps1`、
-  `安装.cmd`、`docs\`、`dist\`（exe + `SharpCompress.dll`）和 `mod\plugin\WeissSchwarzDeckSync.dll`，
-  解压即用，不需要单独装依赖；
-- 打包脚本自己会校验：绝不会带上 `data-root.txt`、`settings.txt`、`build\`、`tests\`、日志和 `*.bak-*`；
+  `安装.cmd`、`docs\`、`dist\`（exe + `SharpCompress.dll`）、`mod\plugin\WeissSchwarzDeckSync.dll`
+  和 `extra\`（内置 T表 / 禁限表，每个插件只带 `plugin.txt` + dll），解压即用，不需要单独装依赖；
+- 打包脚本自己会校验：绝不会带上 `data-root.txt`、`settings.txt`、`build\`、`tests\`、日志、`*.bak-*`
+  和插件自己存的数据（例如 `extra\tierlist\TierList.txt`）；
 - `-IncludeSource` 额外打包源码与测试，`-NoDocs` 去掉截图，`-KeepStaging` 保留
   `build\package\` 方便核对。
 
@@ -544,13 +588,17 @@ DeckBuilder/
   同步到仓库.cmd            sync-to-repo.ps1 的双击入口
   package.ps1               生成 dist\WeissDeckBuilder-<版本>.zip
   version.txt               版本号（package.ps1 读这里）
+  assets/                   程序图标与生成脚本：ws-emblem.png（官方鸢尾花徽标原图）、make-icon.ps1 + icon-maker.cs（生成器）、WeissDeckBuilder.ico / icon-1024.png / icon-preview.png（生成结果）
   settings.txt              界面主题与触发名称（首次保存时生成；本机设置，不进仓库和发布包）
+  extras.log                插件加载失败 / 清单警告的日志（出现失败时才生成；同样不进仓库和发布包）
+  extra/                    附加功能插件，一个文件夹一个插件（模板、备份文件夹以 _ 开头即被忽略）
   THIRD_PARTY_NOTICES.md    随程序分发的第三方组件许可
   lib/
     SharpCompress.dll       RAR / 7z 解包（MIT，见 THIRD_PARTY_NOTICES.md）
   src/
     Models/                 WeissCard、颜色/类型/触发枚举
     Data/                   SingleSetData/CardData/CommonEffects/JPNames/异画/图片/系列封面/卡组导出/我的收藏（CollectionStore）/设置文件（SettingsStore：主题与触发名称共用 `settings.txt`，由 AppSettings / TriggerGlossary 读写）
+    Extras/                 附加功能（插件）：plugin.txt 清单（ExtraManifest）、extra 目录扫描（ExtraCatalog）、程序集加载（ExtraLoader）、插件接口（ExtraContract）、路径与日志（ExtraPaths）
     Search/                 过滤谓词/多选条件、界面 3 种排序、特征排序回归、GBK 比较器
     Infrastructure/         数据目录解析
     UI/                     MainForm、TileGridControl、ThumbnailCache、暗色主题与圆角控件

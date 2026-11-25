@@ -387,7 +387,13 @@ namespace WeissDeckBuilder.UI
         }
     }
 
-    internal sealed class DarkScrollPanel : Panel
+    /// <summary>
+    /// 主题化滚动容器：把 <see cref="Content"/> 整体上下移动，右边缘画一根
+    /// 8 像素宽的细滚动条（轨道取输入框底色、滑块取边框色、拖动时更亮），
+    /// 滚轮一格 56 像素。设置页、附加功能页都用它，插件（禁限表）也直接
+    /// 复用同一个类，滚动条的外观和手感因此和主界面完全一致。
+    /// </summary>
+    public sealed class DarkScrollPanel : Panel
     {
         private const int ScrollbarWidth = 8;
         private const int ScrollbarMargin = 3;

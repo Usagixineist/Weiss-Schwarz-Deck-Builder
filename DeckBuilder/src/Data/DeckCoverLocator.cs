@@ -135,6 +135,24 @@ namespace WeissDeckBuilder.Data
             return result;
         }
 
+        /// <summary>
+        /// 卡号所属的系列名，例如 AW/S18-001 返回"加速世界"。只读
+        /// SingleSetData.txt 的元数据，不解析任何 CardData.txt；元数据里没
+        /// 声明这个前缀时退回前缀本身，调用方总能拿到能显示的文字。
+        /// 插件（禁限表）按系列分组时用它，和侧栏的系列名保持一致。
+        /// </summary>
+        public string GetSeriesName(string cardCode)
+        {
+            if (string.IsNullOrEmpty(cardCode))
+                return string.Empty;
+
+            string prefix = DeckDefinition.GetPrefix(cardCode.Trim());
+            SeriesDefinition series = FindSeries(prefix);
+            return series != null && !string.IsNullOrEmpty(series.Name)
+                ? series.Name
+                : prefix;
+        }
+
         /// <summary>Clears cached paths; mostly useful after a data rescan.</summary>
         public void Clear()
         {

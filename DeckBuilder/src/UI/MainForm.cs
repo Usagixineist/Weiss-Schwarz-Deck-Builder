@@ -41,11 +41,21 @@ namespace WeissDeckBuilder.UI
         /// </summary>
         private enum ViewMode
         {
+            /// <summary>今日运势, the landing page reachable from the WS brand.</summary>
+            Home,
+
             SeriesList,
             CardList,
             DeckNew,
             DeckEdit,
             Settings,
+
+            /// <summary>
+            /// 附加功能: whatever plugins sit in DeckBuilder\extra. The page is
+            /// laid out like 设置 (compact rail plus a second level list) and
+            /// only scans the folder the first time it is opened.
+            /// </summary>
+            Extras,
 
             /// <summary>第一级 of 我的收藏: the series covers, greyed per series.</summary>
             CollectionList,
@@ -219,10 +229,11 @@ namespace WeissDeckBuilder.UI
             _navToolTip = new ToolTip();
             _results = new List<WeissCard>();
             _viewMode = ViewMode.SeriesList;
+            InitializeHomeTimer();
 
             BuildUi();
             PopulateFixedFilters();
-            ShowSeriesList();
+            ShowHome();
 
             // 卡表压缩包可以直接拖到窗口任意位置安装，安装完成后回到系列列表。
             EnableCardPackDrop();
@@ -236,6 +247,11 @@ namespace WeissDeckBuilder.UI
             StartPosition = FormStartPosition.CenterScreen;
             MinimumSize = new Size(1100, 700);
             Size = new Size(1440, 900);
+            // 窗口左上角与任务栏的图标：构建时嵌进 exe 的官方徽标；资源缺失时
+            // 保持系统默认图标，不让窗口因为图标问题启动不了。
+            Icon appIcon = AppIcon.Load();
+            if (appIcon != null)
+                Icon = appIcon;
             Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Regular,
                 GraphicsUnit.Point, 134);
             BackColor = AppTheme.MainBackground;
@@ -269,6 +285,11 @@ namespace WeissDeckBuilder.UI
             // the card list and deck pages. It stays hidden until 设置 is hit.
             _settingsSidebarHost = BuildSettingsSidebarHost();
             root.Controls.Add(_settingsSidebarHost, 1, 0);
+
+            // 附加功能 uses the very same second level column for its plugin
+            // list, so switching between 设置 and 附加功能 keeps the widths.
+            _extrasSidebarHost = BuildExtrasSidebarHost();
+            root.Controls.Add(_extrasSidebarHost, 1, 0);
 
             // The deck detail page reuses the second level slot of the series
             // filter, so both card pages share one sidebar layout.
@@ -319,6 +340,18 @@ namespace WeissDeckBuilder.UI
             _navTitle.Font = _navTitleFont;
             _navTitle.Margin = new Padding(4, 0, 4, 0);
             _navTitle.TextAlign = ContentAlignment.MiddleLeft;
+            _navTitle.Cursor = Cursors.Hand;
+            _navTitle.Click += NavHomeButton_Click;
+            _navTitle.MouseEnter += delegate
+            {
+                _navTitle.ForeColor = AppTheme.AccentHover;
+            };
+            _navTitle.MouseLeave += delegate
+            {
+                _navTitle.ForeColor = AppTheme.Text;
+            };
+            if (_navToolTip != null)
+                _navToolTip.SetToolTip(_navTitle, "回到今日运势");
             _navLayout.Controls.Add(_navTitle, 0, 0);
 
             // The series search sits directly below the brand and above the
@@ -395,6 +428,12 @@ namespace WeissDeckBuilder.UI
                 NavCardEditModifyButton_Click, true, NavSection.CardEdit);
             _navCardEditAddButton = AddNavItem("添加卡片", "添加", "添加卡片",
                 NavCardEditAddButton_Click, true, NavSection.CardEdit);
+
+            // 附加功能 is the extension point: every plugin inside
+            // DeckBuilder\extra shows up as its own page. It has no sub entries
+            // here — that list lives in the second level column.
+            _navExtrasButton = AddNavItem("附加功能", "附加", "附加功能（插件）",
+                NavExtrasButton_Click);
 
             // Both pinned entries live at the bottom of the sidebar: 启动游戏
             // starts the game with the noUpdate argument (the same thing
@@ -1081,6 +1120,10 @@ namespace WeissDeckBuilder.UI
             _browsePage = BuildBrowsePage();
             _contentHost.Controls.Add(_browsePage);
 
+            _homePage = BuildHomePage();
+            _homePage.Visible = false;
+            _contentHost.Controls.Add(_homePage);
+
             _settingsPage = BuildSettingsPage();
             _settingsPage.Visible = false;
             _contentHost.Controls.Add(_settingsPage);
@@ -1090,6 +1133,12 @@ namespace WeissDeckBuilder.UI
             _deckEditPage = BuildDeckEditPage();
             _deckEditPage.Visible = false;
             _contentHost.Controls.Add(_deckEditPage);
+
+            // 附加功能 hosts one plugin at a time; the pages are created by the
+            // plugins themselves and dropped in by ShowExtrasPage.
+            _extrasPage = BuildExtrasPage();
+            _extrasPage.Visible = false;
+            _contentHost.Controls.Add(_extrasPage);
 
             return _contentHost;
         }
@@ -1242,6 +1291,27 @@ namespace WeissDeckBuilder.UI
                 bool settingsActive = page == _settingsPage;
                 if (_settingsSidebarHost.Visible != settingsActive)
                     _settingsSidebarHost.Visible = settingsActive;
+            }
+
+            // 附加功能 owns the same column for its plugin list.
+            if (_extrasSidebarHost != null)
+            {
+                bool extrasActive = page == _extrasPage;
+                if (_extrasSidebarHost.Visible != extrasActive)
+                    _extrasSidebarHost.Visible = extrasActive;
+                if (!extrasActive)
+                    DeactivateExtrasChild();
+            }
+
+            // The minute timer only has work while the landing page is open;
+            // ShowHome still rolls the day over when it is reopened.
+            if (_homeDayTimer != null)
+            {
+                bool homeActive = ReferenceEquals(page, _homePage);
+                if (homeActive && !_homeDayTimer.Enabled)
+                    _homeDayTimer.Start();
+                else if (!homeActive && _homeDayTimer.Enabled)
+                    _homeDayTimer.Stop();
             }
         }
 
@@ -1989,6 +2059,7 @@ namespace WeissDeckBuilder.UI
         {
             if (_deckImportOverlay != null)
                 _deckImportOverlay.Clear();
+            DisposeHomeTimer();
             _thumbnails.Dispose();
             _detailThumbnails.Dispose();
             _navTitleFont.Dispose();
@@ -2104,6 +2175,9 @@ namespace WeissDeckBuilder.UI
             ScheduleDarkChrome();
 
             RefreshNavPaint();
+
+            if (_viewMode == ViewMode.Home)
+                EnsureHomeData();
 
             if (_tileGrid != null && _tileGrid.CanFocus)
                 ActiveControl = _tileGrid;
